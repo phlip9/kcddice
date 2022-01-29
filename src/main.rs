@@ -26,6 +26,7 @@ use std::{
     collections::HashMap,
     env, fmt,
 };
+use tabular::{row, Table};
 
 /// The number of factorials to precompute in our static lookup table. Note this
 /// number is chosen so as not to overflow a u32.
@@ -261,7 +262,7 @@ impl Counts {
         relative_eq!(self.score() as f64, 0.0)
     }
 
-    /// Return the probability of rolling this set of dice
+    /// Return the probability of rolling this set of dice.
     ///
     /// let n = number of dice in the set
     ///     P = n! / (6^n * ∏_{i∈[1,6]} c_i!)
@@ -633,9 +634,9 @@ impl State {
 }
 
 fn usage() -> &'static str {
-    "kcddice rolled-dice \
-    \
-    example: kcddice [1,1,3,4,6]
+    "kcddice rolled-dice\n\
+    \n\
+    example: kcddice [1,1,3,4,6]\n\
     "
 }
 
@@ -675,40 +676,55 @@ fn parse_args(args: &[String]) -> Result<State, String> {
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
 
+    if Some("--help") == args.get(0).map(String::as_str) {
+        println!("usage: {}", usage());
+        return;
+    }
+
     match parse_args(&args) {
         Ok(state) => {
             let (ctxt, actions_values) = state.actions_by_expected_value();
 
-            println!(
-                "\n{:>10}  {:<20} {:>5} {:>6}",
-                "action", "held dice", "expv", "pbust"
-            );
+            let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
+                "action",
+                "held dice",
+                "exp v",
+                "pbust"
+            ));
 
             let len = actions_values.len();
             for (action, value, p_bust) in actions_values.into_iter().take(10) {
-                match action {
-                    Action::Pass => println!(
-                        "{:>10}  {} {:>5.1} {:>6.2}",
-                        "pass",
-                        " ".repeat(20),
-                        value,
-                        p_bust
-                    ),
-                    Action::Roll(held_dice) => {
-                        let held_dice_str = format!("{:?}", held_dice);
-                        println!(
-                            "{:>10}  {:<20} {:>5.1} {:>6.2}",
-                            "hold dice", held_dice_str, value, p_bust
-                        )
-                    }
-                }
-            }
-            if len > 10 {
-                println!("{:>10}  (x {})", "...", len - 10);
+                let value_str = format!("{:0.1}", value);
+                let p_bust_str = format!("{:0.2}", p_bust);
+                let (action_str, dice_str) = match action {
+                    Action::Pass => ("pass", String::new()),
+                    Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
+                };
+                table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
             }
 
-            println!("\n{:>16}: {}", "cache queries", ctxt.cache_queries());
-            println!("{:>16}: {:.3}", "cache hit rate", ctxt.cache_hit_rate());
+            // we only show the top 10 results, but display '...' to show that
+            // there were more.
+            if len > 10 {
+                table.add_row(row!("...", format!("(x {})", len - 10), "", ""));
+            }
+
+            // display evaluation statistics
+            table.add_heading("");
+            table.add_row(row!(
+                "cache queries",
+                ctxt.cache_queries().to_string(),
+                "",
+                ""
+            ));
+            table.add_row(row!(
+                "cache hit rate",
+                format!("{:0.3}", ctxt.cache_hit_rate()),
+                "",
+                ""
+            ));
+
+            print!("\n{}", table);
         }
         Err(err) => {
             println!("Invalid arguments: {}", err);

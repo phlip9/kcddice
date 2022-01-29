@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 approx = "0.5.1"
+tabular = "0.2.0"
 
 [profile.release]
 codegen-units = 1
