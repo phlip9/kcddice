@@ -1,3 +1,24 @@
+//! # kcddice
+//!
+//! A simple utility for optimally playing the Kingdom Come: Deliverance dice
+//! game : )
+//!
+//! ## Rules
+//!
+//! https://kingdom-come-deliverance.fandom.com/wiki/Dice
+//!
+//! ## Explanation
+//!
+//! More specifically, this tool takes as input the currently rolled dice on the
+//! board and outputs all possible actions along with their expected values and
+//! bust probabilities.
+//!
+//! The expected value in this case is the expectation of the turn total assuming
+//! the player maximizes their expected value.
+//!
+//! The bust probability is the probability that no scoring dice are rolled
+//! assuming you choose the associated action.
+
 use approx::relative_eq;
 use std::{
     cell::Cell,
@@ -6,7 +27,12 @@ use std::{
     env, fmt,
 };
 
+/// The number of factorials to precompute in our static lookup table. Note this
+/// number is chosen so as not to overflow a u32.
 const NUM_FACTORIALS: usize = 13;
+/// A precomputed lookup table of factorials from `0 <= n < NUM_FACTORIALS`.
+/// `FACTORIAL_LT[n] = n!`.
+const FACTORIAL_LT: [u32; NUM_FACTORIALS] = precompute_factorials();
 
 const fn precompute_factorials() -> [u32; NUM_FACTORIALS] {
     let mut factorials: [u32; NUM_FACTORIALS] = [1; NUM_FACTORIALS];
@@ -24,23 +50,25 @@ const fn precompute_factorials() -> [u32; NUM_FACTORIALS] {
     factorials
 }
 
-const FACTORIAL_LT: [u32; NUM_FACTORIALS] = precompute_factorials();
-
 const fn factorial(n: u32) -> u32 {
     FACTORIAL_LT[n as usize]
 }
 
+/// `n choose k` without replacement.
 #[cfg(test)]
 const fn num_combinations(n: u32, k: u32) -> u32 {
     factorial(n) / (factorial(k) * factorial(n - k))
 }
 
+/// `n choose k` with replacement.
 #[cfg(test)]
 #[inline]
 const fn num_multisets(n: u32, k: u32) -> u32 {
     num_combinations(n + k - 1, k)
 }
 
+/// A total ordering on f64's. Needed until `f64::total_cmp` is stabilized.
+/// See: (https://doc.rust-lang.org/stable/std/primitive.f64.html#method.total_cmp)
 #[inline]
 pub fn total_cmp_f64(a: &f64, b: &f64) -> cmp::Ordering {
     let mut left = a.to_bits() as i64;
@@ -52,11 +80,20 @@ pub fn total_cmp_f64(a: &f64, b: &f64) -> cmp::Ordering {
     left.cmp(&right)
 }
 
+/// A compressed representation of a set of dice, stored as counts of each die
+/// packed into a u32. Visually,
+///
+/// `XXXX 1111 2222 3333 4444 5555 6666 XXXX`, where `XXXX`s are unused nibbles
+/// and `NNNN` is the nibble for the n'th die.
+///
+/// This representation has the added benefit of being order invariant, since
+/// the order of dice in a set is not important.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
 struct Counts(pub u32);
 
 impl Counts {
+    /// A new empty set of dice rolls.
     #[inline]
     fn new() -> Self {
         Self(0)
@@ -70,6 +107,8 @@ impl Counts {
         counts
     }
 
+    /// A convenience function for constructing a `Counts` set from an unordered
+    /// list of dice rolls.
     #[cfg(test)]
     fn from_rolls(rolls: &[u8]) -> Self {
         let mut counts_arr = [0u8; 7];
@@ -85,13 +124,13 @@ impl Counts {
     }
 
     #[inline]
-    fn is_empty(&self) -> bool {
+    fn is_empty(self) -> bool {
         self.0 == 0
     }
 
     // The number of dice in this set
     #[inline]
-    fn len(&self) -> u8 {
+    fn len(self) -> u8 {
         let mut len = 0;
         for roll in 1..=6 {
             len += self.get_count(roll);
@@ -100,7 +139,7 @@ impl Counts {
     }
 
     #[inline]
-    fn get_count(&self, roll: u8) -> u8 {
+    fn get_count(self, roll: u8) -> u8 {
         ((self.0 >> (4 * (roll as u32))) & 0xf) as u8
     }
 
@@ -124,9 +163,9 @@ impl Counts {
         Self(self.0 + other.0)
     }
 
-    // compute the score of a set of dice. will still work with non-scoring dice
-    // mixed in.
-    fn score(&self) -> u16 {
+    /// Returns the score of a set of dice. will still work with non-scoring dice
+    /// mixed in.
+    fn score(self) -> u16 {
         if self.is_empty() {
             return 0;
         }
@@ -173,7 +212,9 @@ impl Counts {
         score
     }
 
-    fn exact_score(&self) -> u16 {
+    /// Return the score of a set of dice. If there are any non-scoring dice in
+    /// the set, then this returns 0.
+    fn exact_score(self) -> u16 {
         if self.is_empty() {
             return 0;
         }
@@ -227,16 +268,18 @@ impl Counts {
         score
     }
 
+    /// Return true if this set has no scoring dice, also called a "bust".
     #[inline]
-    fn is_bust(&self) -> bool {
+    fn is_bust(self) -> bool {
         relative_eq!(self.score() as f64, 0.0)
     }
 
-    // Return the probability of rolling this set of dice
-    // n = number of dice in the set
-    // P = n! / (6^n * ∏_{i∈[1,6]} c_i!)
-    //     where c_i is the count of the i'th dice in the set
-    fn p_roll(&self) -> f64 {
+    /// Return the probability of rolling this set of dice
+    ///
+    /// let n = number of dice in the set
+    ///     P = n! / (6^n * ∏_{i∈[1,6]} c_i!)
+    ///         where c_i is the count of the i'th dice in the set
+    fn p_roll(self) -> f64 {
         let n = self.len();
 
         let prod: u32 = (1..=6)
@@ -248,7 +291,7 @@ impl Counts {
         (factorial(n as u32) as f64) / ((prod * m) as f64)
     }
 
-    fn to_rolls(&self) -> Vec<u8> {
+    fn to_rolls(self) -> Vec<u8> {
         let mut rolls = Vec::new();
         for roll in 1..=6 {
             for _ in 0..self.get_count(roll) {
@@ -277,13 +320,13 @@ impl cmp::PartialOrd for Counts {
     }
 }
 
-// An `Iterator` over combinations (with replacement) of _all_ dice roll outcomes
+/// An `Iterator` over combinations (with replacement) of _all_ dice roll outcomes.
 struct AllDiceMultisetsIter {
-    // the _next_ combination we'll output (unless we're done).
+    /// the _next_ combination we'll output (unless we're done).
     counts: Counts,
-    // total number of dice rolls per combination.
+    /// total number of dice rolls per combination.
     total_dice: u8,
-    // set to `true` when we're done generating.
+    /// set to `true` when we're done generating.
     done: bool,
 }
 
@@ -334,7 +377,7 @@ impl Iterator for AllDiceMultisetsIter {
     }
 }
 
-// Return all possible sub-multisets of size `ndice` of a given set of dice rolls.
+/// Return all possible sub-multisets of size `ndice` of a given set of dice rolls.
 fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
     fn rec(cb: &mut impl FnMut(Counts), mut acc: Counts, mut left: Counts, ndice: u8) {
         // time to return the accumulator
@@ -357,13 +400,13 @@ fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
 
         let elts_left = left.len();
 
-        // special case: |S| = n means just one combination: S
+        // special case: |S| = n means just one possible combination: S
         if elts_left == ndice {
             cb(acc.add(left));
             return;
         }
 
-        // will never have enough; return empty
+        // will never have enough; skip
         if elts_left < ndice {
             return;
         }
@@ -387,57 +430,28 @@ fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
     out
 }
 
-// game state {
-//   target_total
-//   other_total
-//   my_total
-//   my_round_total
-//   dice = {i | 1 <= i <= 6} x n
-// }
-
-// plan:
-// 1. probability of given rolls combination
-// 2. game state
-// 3. given a current game state, want to compute action with maximum win
-//    probability assuming minimax etc...
-// 4. for now, probably just try to compute action with greatest expected reward
-//    for a full round?
-
-// dice = [1, 1, 3, 5, 6]
-//
-// [1] [3] [5] [6]
-// [1, 1] [1, 3] [1, 5] [1, 6] [3, 5] [3, 6] [5, 6]
-// [1, 1, 3] [1, 1, 5] [1, 1, 6] [1, 3, 5] [1, 3, 6] [1, 5, 6] [3, 5, 6]
-
-// suppose we can roll 3 dice
-// what is the probability we roll the exact sequence [1, 1, 3]?
-// if we care about the exact sequence (i.e., order matters) then it's (1/6)^3,
-// i.e., P(roll 1, roll 1, roll 3) = P(roll 1) * P(roll 1) * P(roll 3) = (1/6)^3
-//
-// what is the probability we roll [1, 1, 3] (in any order)?
-// p1 p1 p3
-// p1 p3 p1
-// p3 p1 p1
-
-// game is not guaranteed to terminate, need state cache?
-
+/// An `Action` represents any of the possible actions the player can take from a
+/// given round [`State`]. Note that a "bust" is simply the absence of any possible
+/// actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Action {
-    // Player passes their turn, adding their current round points to their total.
+    /// If there is at least one scoring die, the player can pass their turn,
+    /// ending their turn and scoring their current round total + the currently
+    /// rolled dice score.
     Pass,
-    // Player can choose to hold some non-empty subset of scoring dice and roll
-    // the rest. The held dice score is added to their round total.
+    /// If there is at least one scoring die and at least 2 dice left, the player
+    /// can choose to hold some non-empty subset of scoring dice and re-roll the
+    /// rest. The held dice score is added to their current round total.
     Roll(Counts),
 }
 
-// fn states_expected_value(states: &[(State, f64)]) -> f64 {
-//     states
-//         .into_iter()
-//         .map(|(state, p_state)| p_state * (state.my_total as f64))
-//         .sum()
-// }
-
+/// The `Context` is some additional evaluation state passed along while evaluating
+/// `(state, action) -> expected value`. The evaluation should still be correct
+/// even without the `Context`; rather, the `Context` should be used only for
+/// optimizations or evaluation statistics.
 struct Context {
+    /// A cache from (State, Action) pairs to their expected value after evaluation.
+    /// This cache turns a 13sec evaluation into a 30ms evaluation.
     action_value_cache: HashMap<(State, Action), f64>,
     cache_hits: Cell<u64>,
     cache_misses: Cell<u64>,
@@ -489,14 +503,16 @@ impl Context {
     }
 }
 
+/// A representation of the player's turn state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct State {
-    // the set of dice we just rolled
+    /// The set of dice the player just rolled.
     pub rolled_dice: Counts,
+    /// The player's current round score (accumulated from previous rolls in the turn).
+    pub my_round_total: u16,
     // pub target_total: u16,
     // pub other_total: u16,
     // pub my_total: u16,
-    pub my_round_total: u16,
 }
 
 impl State {
@@ -518,21 +534,24 @@ impl State {
     //     }
     // }
 
+    /// From the current turn `State` return the complete set of possible `Action`s
+    /// the player can take. Returns an empty set if the player has "busted".
     fn actions(&self) -> Vec<Action> {
         // if this dice roll has no scores whatsoever, then there are no actions
         // (our turn has ended).
-        if self.rolled_dice.score() == 0 {
+        if self.rolled_dice.is_bust() {
             return Vec::new();
         }
 
-        // can hold at most 6 - k - 1 dice (can't hold all the dice left)
+        // we can't hold all the dice.
         let max_num_holds = self.rolled_dice.len() - 1;
 
+        // the set of all possible dice we can hold from the board.
         let possible_holds = (1..=max_num_holds)
             .flat_map(|ndice| dice_multisets(self.rolled_dice, ndice))
             // can only hold
             .filter(|held_dice| held_dice.exact_score() > 0)
-            .map(|held_dice| Action::Roll(held_dice))
+            .map(Action::Roll)
             .collect::<Vec<_>>();
 
         let mut actions_vec = possible_holds;
@@ -608,13 +627,9 @@ impl State {
     //     }
     // }
 
-    // assuming we take a particular action on this game state, what is the
-    // expected value (i.e., P * my_total)?
-    fn action_expected_value(
-        &self,
-        ctxt: &mut Context,
-        action: Action, /*, depth: usize */
-    ) -> f64 {
+    /// Evaluate the expected value of applying the given `action` to the current
+    /// turn `State`.
+    fn action_expected_value(&self, ctxt: &mut Context, action: Action) -> f64 {
         // ACTIONS_EXPLORED.fetch_add(1, Ordering::Relaxed);
         if let Some(action_value) = ctxt.peek_cache(&(*self, action)) {
             return action_value;
@@ -726,6 +741,8 @@ impl State {
         expected_value
     }
 
+    /// Evaluate the probability of "busting" immediately after applying the
+    /// given `Action` to the current turn `State`.
     fn action_p_bust(&self, action: Action) -> f64 {
         match action {
             Action::Pass => 0.0,
@@ -746,8 +763,8 @@ impl State {
         }
     }
 
-    // for each possible action, given that I chose that action, what is the
-    // expected turn score?
+    /// For each possible `Action` from this `State`, conditioned on choosing that
+    /// action, what is the expected turn score and bust probability?
     fn actions_by_expected_value(&self) -> (Context, Vec<(Action, f64, f64)>) {
         // ACTIONS_EXPLORED.store(0, Ordering::Relaxed);
         let mut ctxt = Context::new();
@@ -764,6 +781,7 @@ impl State {
             })
             .collect::<Vec<_>>();
 
+        // sort by the expected turn score from highest to lowest.
         actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
         (ctxt, actions_values)
     }
@@ -783,10 +801,11 @@ impl State {
 fn usage() -> &'static str {
     "kcddice rolled-dice \
     \
-    example: kcddice values [1,1,3,4,6]
+    example: kcddice [1,1,3,4,6]
     "
 }
 
+/// Parse a comma separated list of dice into a `Counts` set.
 fn parse_dice(s: &str) -> Result<Counts, String> {
     let mut counts = Counts::new();
 
@@ -797,7 +816,7 @@ fn parse_dice(s: &str) -> Result<Counts, String> {
         let roll = roll_str
             .parse::<u8>()
             .map_err(|err| format!("dice roll is not a valid integer: {}", err))?;
-        if 1 <= roll && roll <= 6 {
+        if (1..=6).contains(&roll) {
             counts.add_count(roll, 1);
         } else {
             return Err(format!("roll is out of range [1, 6]: {}", roll));
@@ -842,7 +861,6 @@ fn main() {
 
     match parse_args(&args) {
         Ok(state) => {
-            println!("");
             // let actions_values = match command {
             //     Command::Values => state.actions_by_expected_value(),
             //     Command::PBust => state.actions_by_p_bust(),
@@ -851,7 +869,7 @@ fn main() {
             let (ctxt, actions_values) = state.actions_by_expected_value();
 
             println!(
-                "{:>10}  {:<20} {:>5} {:>6}",
+                "\n{:>10}  {:<20} {:>5} {:>6}",
                 "action", "held dice", "expv", "pbust"
             );
 
