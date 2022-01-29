@@ -99,14 +99,6 @@ impl Counts {
         Self(0)
     }
 
-    #[cfg(test)]
-    #[inline]
-    fn from_roll(roll: u8, count: u8) -> Self {
-        let mut counts = Self::new();
-        counts.add_count(roll, count);
-        counts
-    }
-
     /// A convenience function for constructing a `Counts` set from an unordered
     /// list of dice rolls.
     #[cfg(test)]
@@ -153,11 +145,6 @@ impl Counts {
     fn add_count(&mut self, roll: u8, count: u8) {
         self.0 += ((count as u32) & 0x7) << (4 * (roll as u32));
     }
-
-    // #[inline]
-    // fn sub_count(&mut self, roll: u8, count: u8) {
-    //     self.0 -= ((count as u32) & 0x7) << (4 * (roll as u32));
-    // }
 
     fn add(self, other: Self) -> Self {
         Self(self.0 + other.0)
@@ -510,13 +497,10 @@ struct State {
     pub rolled_dice: Counts,
     /// The player's current round score (accumulated from previous rolls in the turn).
     pub my_round_total: u16,
-    // pub target_total: u16,
-    // pub other_total: u16,
-    // pub my_total: u16,
 }
 
 impl State {
-    fn new(/* target_total: u16, */ rolled_dice: Counts) -> Self {
+    fn new(rolled_dice: Counts) -> Self {
         Self {
             // target_total,
             // other_total: 0,
@@ -525,14 +509,6 @@ impl State {
             rolled_dice,
         }
     }
-
-    // fn new_with_round_total(my_round_total: u16, rolled_dice: Counts) -> Self {
-    //     Self {
-    //         // my_total: 0,
-    //         my_round_total,
-    //         rolled_dice,
-    //     }
-    // }
 
     /// From the current turn `State` return the complete set of possible `Action`s
     /// the player can take. Returns an empty set if the player has "busted".
@@ -562,93 +538,15 @@ impl State {
         actions_vec
     }
 
-    // apply an action and return the set of possible end turn states along with
-    // the probability of reaching each result state
-    // fn apply_action(&self, action: Action) -> Vec<(State, f64)> {
-    //     println!("({:?}).apply_action({:?})", self, action);
-    //
-    //     match action {
-    //         Action::Pass => {
-    //             let end_state = State {
-    //                 my_total: self.my_total + self.my_round_total + self.rolled_dice.score(),
-    //                 my_round_total: 0,
-    //                 rolled_dice: Counts::new(),
-    //             };
-    //             println!("\t => pass end state: {:?}", end_state);
-    //             vec![(end_state, 1.0)]
-    //         }
-    //         Action::Roll(held_dice) => {
-    //             // we have this many dice left to roll
-    //             let ndice_left = self.rolled_dice.len() - held_dice.len();
-    //
-    //             // fold the held dice score into the round total
-    //             // the rolled_dice is just an empty placeholder at this point
-    //             let partial_state = State {
-    //                 my_total: self.my_total,
-    //                 my_round_total: self.my_round_total + held_dice.exact_score(),
-    //                 rolled_dice: Counts::new(),
-    //             };
-    //
-    //             println!(
-    //                 "\theld_dice: {:?}\n\t=> partial_state: {:?}",
-    //                 held_dice, partial_state
-    //             );
-    //
-    //             let mut out = Vec::new();
-    //
-    //             // for all possible dice rolls
-    //             for next_roll in AllDiceMultisetsIter::new(ndice_left) {
-    //                 let p_roll = next_roll.p_roll();
-    //
-    //                 println!("\t\tnext_roll: {:?}, p_roll: {}", next_roll, p_roll);
-    //
-    //                 let mut next_state = partial_state;
-    //                 next_state.rolled_dice = next_roll;
-    //
-    //                 let next_actions = next_state.actions();
-    //                 for next_action in next_actions {
-    //                     // recurse; this will return the final turn end states
-    //                     // with unconditioned probabilities
-    //                     let mut end_states = next_state.apply_action(next_action);
-    //
-    //                     // condition on the roll probability
-    //                     for (_, p_end_state) in &mut end_states {
-    //                         *p_end_state *= p_roll;
-    //                     }
-    //
-    //                     println!("end_states: {:?}", end_states);
-    //
-    //                     out.extend(end_states);
-    //                 }
-    //             }
-    //
-    //             out
-    //         }
-    //     }
-    // }
-
     /// Evaluate the expected value of applying the given `action` to the current
     /// turn `State`.
     fn action_expected_value(&self, ctxt: &mut Context, action: Action) -> f64 {
-        // ACTIONS_EXPLORED.fetch_add(1, Ordering::Relaxed);
         if let Some(action_value) = ctxt.peek_cache(&(*self, action)) {
             return action_value;
         }
 
-        // let pad = "    ".repeat(depth);
-        // println!("{}({:?}).action_expected_value({:?})", pad, self, action);
-
         let expected_value = match action {
-            Action::Pass => {
-                // let end_state = State {
-                //     // my_total: self.my_total + self.my_round_total + self.rolled_dice.score(),
-                //     my_round_total: self.my_round_total + self.rolled_dice.score(),
-                //     rolled_dice: Counts::new(),
-                // };
-                (self.my_round_total + self.rolled_dice.score()) as f64
-                // println!("{}pass end state: {:?}", pad, end_state);
-                // end_state.my_total as f64
-            }
+            Action::Pass => (self.my_round_total + self.rolled_dice.score()) as f64,
             Action::Roll(held_dice) => {
                 // we have this many dice left to roll
                 let ndice_left = self.rolled_dice.len() - held_dice.len();
@@ -656,15 +554,9 @@ impl State {
                 // fold the held dice score into the round total
                 // the rolled_dice is just an empty placeholder at this point
                 let partial_state = State {
-                    // my_total: self.my_total,
                     my_round_total: self.my_round_total + held_dice.exact_score(),
                     rolled_dice: Counts::new(),
                 };
-
-                // println!(
-                //     "{}held_dice: {:?} => partial_state: {:?}",
-                //     pad, held_dice, partial_state
-                // );
 
                 let mut expected_value = 0.0_f64;
 
@@ -672,55 +564,15 @@ impl State {
                 for next_roll in AllDiceMultisetsIter::new(ndice_left) {
                     let p_roll = next_roll.p_roll();
 
-                    // println!("{}next_roll: {:?} w.p. {}", pad, next_roll, p_roll);
-
                     let mut next_state = partial_state;
                     next_state.rolled_dice = next_roll;
 
                     // want to maximize expected value; choose action with
                     // greatest expected value
-
-                    // let next_actions_by_value = next_state
-                    //     .actions()
-                    //     .into_iter()
-                    //     .map(|next_action| {
-                    //         (
-                    //             next_state.action_expected_value(next_action, depth + 1),
-                    //             next_action,
-                    //         )
-                    //     })
-                    //     .collect::<Vec<_>>();
-                    //
-                    // for (next_action_value, next_action) in &next_actions_by_value {
-                    //     println!(
-                    //         "{}{}possible_action: {:?}, cond value: {}",
-                    //         pad, pad, next_action, next_action_value
-                    //     );
-                    // }
-                    //
-                    // let best_action_value = next_actions_by_value
-                    //     .into_iter()
-                    //     .map(|(value, _)| value)
-                    //     .max_by(total_cmp_f64)
-                    //     .unwrap_or(0.0);
-                    //
-                    // println!(
-                    //     "{}best cond value: {}, best value: {}",
-                    //     pad,
-                    //     best_action_value,
-                    //     p_roll * &best_action_value
-                    // );
-
                     let best_action_value = next_state
                         .actions()
                         .into_iter()
-                        .map(|next_action| {
-                            next_state.action_expected_value(
-                                ctxt,
-                                next_action,
-                                /* depth + 1 */
-                            )
-                        })
+                        .map(|next_action| next_state.action_expected_value(ctxt, next_action))
                         .max_by(total_cmp_f64)
                         .unwrap_or(0.0);
 
@@ -731,13 +583,7 @@ impl State {
             }
         };
 
-        // println!(
-        //     "{}({:?}).action_expected_value({:?}) ====> {}",
-        //     pad, self, action, expected_value
-        // );
-
         ctxt.fill_cache((*self, action), expected_value);
-
         expected_value
     }
 
@@ -766,7 +612,6 @@ impl State {
     /// For each possible `Action` from this `State`, conditioned on choosing that
     /// action, what is the expected turn score and bust probability?
     fn actions_by_expected_value(&self) -> (Context, Vec<(Action, f64, f64)>) {
-        // ACTIONS_EXPLORED.store(0, Ordering::Relaxed);
         let mut ctxt = Context::new();
 
         let mut actions_values = self
@@ -785,17 +630,6 @@ impl State {
         actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
         (ctxt, actions_values)
     }
-
-    // fn actions_by_p_bust(&self) -> Vec<(Action, f64)> {
-    //     let mut actions_p_busts = self
-    //         .actions()
-    //         .into_iter()
-    //         .map(|action| (action, self.action_p_bust(action)))
-    //         .collect::<Vec<_>>();
-    //
-    //     actions_p_busts.sort_unstable_by(|(_, v1), (_, v2)| total_cmp_f64(v1, v2).reverse());
-    //     actions_p_busts
-    // }
 }
 
 fn usage() -> &'static str {
@@ -826,28 +660,10 @@ fn parse_dice(s: &str) -> Result<Counts, String> {
     Ok(counts)
 }
 
-// enum Command {
-//     Values,
-//     PBust,
-// }
-
 fn parse_args(args: &[String]) -> Result<State, String> {
     match args {
         [rolled_dice] => {
-            // let command = if command == "values" {
-            //     Command::Values
-            // } else if command == "pbust" {
-            //     Command::PBust
-            // } else {
-            //     return Err(format!("Unrecognized command: {}", command));
-            // };
-
-            // let round_total: u16 = round_total
-            //     .parse()
-            //     .map_err(|err| format!("Parse error: round-total is not a valid u16: {}", err))?;
-
             let rolled_dice = parse_dice(rolled_dice)?;
-            // let state = State::new_with_round_total(round_total, rolled_dice);
             let state = State::new(rolled_dice);
 
             Ok(state)
@@ -861,11 +677,6 @@ fn main() {
 
     match parse_args(&args) {
         Ok(state) => {
-            // let actions_values = match command {
-            //     Command::Values => state.actions_by_expected_value(),
-            //     Command::PBust => state.actions_by_p_bust(),
-            // };
-
             let (ctxt, actions_values) = state.actions_by_expected_value();
 
             println!(
@@ -925,7 +736,7 @@ mod test {
 
     // simple recursive implementation
     fn all_dice_multisets_ref(ndice: u8) -> Vec<Counts> {
-        fn rec(cb: &mut impl FnMut(Counts), mut counts: Counts, current_dice: u8, ndice: u8) {
+        fn rec(cb: &mut impl FnMut(Counts), counts: Counts, current_dice: u8, ndice: u8) {
             // time to return the accumulator
             if ndice == 0 {
                 cb(counts);
@@ -1073,7 +884,7 @@ mod test {
     #[test]
     fn test_counts_probability() {
         assert_relative_eq!(
-            (3 as f64) / ((6.0_f64).powf(3.0)),
+            3.0 / ((6.0_f64).powf(3.0)),
             Counts::from_rolls(&[1, 1, 3]).p_roll()
         );
 
@@ -1092,7 +903,7 @@ mod test {
     fn test_actions_by_expected_value() {
         let state = State::new(Counts::from_rolls(&[5, 5, 3, 3, 4]));
 
-        for tuple in state.actions_by_expected_value() {
+        for tuple in state.actions_by_expected_value().1 {
             println!("{:?}", tuple);
         }
     }
