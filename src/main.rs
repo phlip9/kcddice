@@ -501,12 +501,12 @@ struct State {
 }
 
 impl State {
-    fn new(rolled_dice: Counts) -> Self {
+    fn new(my_round_total: u16, rolled_dice: Counts) -> Self {
         Self {
             // target_total,
             // other_total: 0,
             // my_total: 0,
-            my_round_total: 0,
+            my_round_total,
             rolled_dice,
         }
     }
@@ -634,9 +634,9 @@ impl State {
 }
 
 fn usage() -> &'static str {
-    "kcddice rolled-dice\n\
+    "kcddice round-total rolled-dice\n\
     \n\
-    example: kcddice [1,1,3,4,6]\n\
+    example: kcddice 100 [1,1,3,4,6]\n\
     "
 }
 
@@ -663,9 +663,13 @@ fn parse_dice(s: &str) -> Result<Counts, String> {
 
 fn parse_args(args: &[String]) -> Result<State, String> {
     match args {
-        [rolled_dice] => {
+        [round_total, rolled_dice] => {
+            let round_total: u16 = round_total
+                .parse()
+                .map_err(|err| format!("round-total is not a valid integer: {}", err))?;
+
             let rolled_dice = parse_dice(rolled_dice)?;
-            let state = State::new(rolled_dice);
+            let state = State::new(round_total, rolled_dice);
 
             Ok(state)
         }
@@ -854,7 +858,7 @@ mod test {
     #[test]
     fn test_gen_actions() {
         fn actions(rolls: &[u8]) -> Vec<Action> {
-            let state = State::new(Counts::from_rolls(rolls));
+            let state = State::new(0, Counts::from_rolls(rolls));
             let mut actions = state.actions();
             actions.sort_unstable();
             actions
@@ -917,7 +921,7 @@ mod test {
 
     #[test]
     fn test_actions_by_expected_value() {
-        let state = State::new(Counts::from_rolls(&[5, 5, 3, 3, 4]));
+        let state = State::new(0, Counts::from_rolls(&[5, 5, 3, 3, 4]));
 
         for tuple in state.actions_by_expected_value().1 {
             println!("{:?}", tuple);
