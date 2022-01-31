@@ -170,9 +170,13 @@ impl Counts {
         if c1 > 0 && c2 > 0 && c3 > 0 && c4 > 0 && c5 > 0 && c6 > 0 {
             return 1500;
         } else if c2 > 0 && c3 > 0 && c4 > 0 && c5 > 0 && c6 > 0 {
-            return 750;
+            let extra_5 = if c5 == 2 { 50 } else { 0 };
+            // can't have an extra 1, since then we would just have a full straight
+            return 750 + extra_5;
         } else if c1 > 0 && c2 > 0 && c3 > 0 && c4 > 0 && c5 > 0 {
-            return 500;
+            let extra_1 = if c1 == 2 { 100 } else { 0 };
+            let extra_5 = if c5 == 2 { 50 } else { 0 };
+            return 500 + extra_1 + extra_5;
         }
 
         let mut score: u16 = 0;
@@ -222,9 +226,18 @@ impl Counts {
         // [0 1 1 1 1 1]
         } else if c1 == 0 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 1 {
             return 750;
+        // [0 1 1 1 2 1]
+        } else if c1 == 0 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 2 && c6 == 1 {
+            return 750 + 50;
         // [1 1 1 1 1 0]
         } else if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 0 {
             return 500;
+        // [2 1 1 1 1 0]
+        } else if c1 == 2 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 0 {
+            return 500 + 100;
+        // [1 1 1 1 2 0]
+        } else if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 2 && c6 == 0 {
+            return 500 + 50;
         }
 
         let mut score: u16 = 0;
@@ -507,70 +520,6 @@ impl Context {
         }
         return false;
     }
-
-    // depth<=10
-    //                 action  held dice  exp v pbust
-    //              hold dice  [1]        426.4  0.08
-    //              hold dice  [5]        390.0  0.08
-    //              hold dice  [1, 1]     343.7  0.16
-    //              hold dice  [1, 5]     307.6  0.16
-    //              hold dice  [1, 1, 5]  293.4  0.28
-    //                   pass             250.0  0.00
-    //
-    //       actions explored  343141944
-    //         cache hit rate  0.388
-    //       depth prune rate  0.608
-    // joint prob. prune rate  0.000
-    //
-    // real    1m14.322s
-
-    // depth<=5
-    //                 action  held dice  exp v pbust
-    //              hold dice  [1]        425.8  0.08
-    //              hold dice  [5]        388.9  0.08
-    //              hold dice  [1, 1]     343.2  0.16
-    //              hold dice  [1, 5]     306.8  0.16
-    //              hold dice  [1, 1, 5]  292.6  0.28
-    //                   pass             250.0  0.00
-    //
-    //       actions explored  142571454
-    //         cache hit rate  0.361
-    //       depth prune rate  0.634
-    // joint prob. prune rate  0.000
-    //
-    // real    0m33.005s
-
-    // depth<=2
-    //                 action  held dice  exp v pbust
-    //              hold dice  [1]        418.0  0.08
-    //              hold dice  [5]        381.5  0.08
-    //              hold dice  [1, 1]     330.9  0.16
-    //              hold dice  [1, 5]     294.6  0.16
-    //              hold dice  [1, 1, 5]  289.5  0.28
-    //                   pass             250.0  0.00
-    //
-    //       actions explored  24037755
-    //         cache hit rate  0.278
-    //       depth prune rate  0.716
-    // joint prob. prune rate  0.000
-    //
-    // real    0m8.907s
-
-    // depth<=10  joint>=1e-5
-    //                 action  held dice  exp v pbust
-    //              hold dice  [1]        416.1  0.08
-    //              hold dice  [5]        379.4  0.08
-    //              hold dice  [1, 1]     331.0  0.16
-    //              hold dice  [1, 5]     294.0  0.16
-    //              hold dice  [1, 1, 5]  288.5  0.28
-    //                   pass             250.0  0.00
-    //
-    //       actions explored  3239875
-    //         cache hit rate  0.303
-    //       depth prune rate  0.000
-    // joint prob. prune rate  0.686
-    //
-    // real    0m4.829s
 
     #[inline]
     fn peek_cache(&self, key: &(State, Action)) -> Option<f64> {
@@ -1049,10 +998,37 @@ mod test {
                 Pass,
                 roll![1],
                 roll![1, 1],
+                roll![1, 1, 3, 3, 3],
                 roll![1, 3, 3, 3],
                 roll![3, 3, 3]
             ],
             actions(&[1, 1, 3, 3, 3])
+        );
+
+        // should include hold (straight ++ 5) action
+        assert_eq!(
+            vec![
+                Pass,
+                roll![2, 3, 4, 5, 5, 6],
+                roll![2, 3, 4, 5, 6],
+                roll![5],
+                roll![5, 5],
+            ],
+            actions(&[2, 3, 4, 5, 5, 6]),
+        );
+
+        assert_eq!(
+            vec![
+                Pass,
+                roll![1],
+                roll![1, 1],
+                roll![1, 1, 2, 3, 4, 5],
+                roll![1, 1, 5],
+                roll![1, 2, 3, 4, 5],
+                roll![1, 5],
+                roll![5],
+            ],
+            actions(&[1, 1, 2, 3, 4, 5]),
         );
     }
 
