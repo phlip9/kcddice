@@ -444,6 +444,11 @@ struct Context {
     /// board, then the game is no longer finite and isn't guaranteed to terminate.
     /// This depth limit is then necessary for our search to terminate.
     depth: u32,
+    /// The current joint probability of this evaluation path, i.e., `P(X_1, .., X_n)`
+    /// where `X_i` is the i'th random dice set drawn in this evaluation path.
+    /// We use this to limit searching of super low probability evaluation paths
+    /// (which also tend to explode our branching factor).
+    joint_path_prob: f64,
     /// A cache from (State, Action) pairs to their expected value after evaluation.
     /// This cache turns a 13sec evaluation into a 30ms evaluation.
     action_value_cache: HashMap<(State, Action), f64>,
@@ -455,6 +460,7 @@ impl Context {
     fn new() -> Self {
         Context {
             depth: 0,
+            joint_path_prob: 1.0,
             cache_hits: Cell::new(0),
             cache_misses: Cell::new(0),
             action_value_cache: HashMap::new(),
@@ -462,10 +468,16 @@ impl Context {
     }
 
     #[inline]
-    fn with_next_depth<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+    fn with_next_depth<T>(&mut self, p_roll: f64, f: impl FnOnce(&mut Self) -> T) -> T {
         self.depth += 1;
+        let pre_joint_prob = self.joint_path_prob;
+        self.joint_path_prob *= p_roll;
+
         let res = f(self);
+
         self.depth -= 1;
+        self.joint_path_prob = pre_joint_prob;
+
         res
     }
 
@@ -571,6 +583,11 @@ impl State {
                     return 0.0;
                 }
 
+                // limit search paths below a certain joint probability.
+                if ctxt.joint_path_prob < 1.0e-6 {
+                    return 0.0;
+                }
+
                 // we have this many dice left to roll
                 let ndice_left = self.rolled_dice.len() - held_dice.len();
 
@@ -600,7 +617,7 @@ impl State {
                         .actions()
                         .into_iter()
                         .map(|next_action| {
-                            ctxt.with_next_depth(move |ctxt| {
+                            ctxt.with_next_depth(p_roll, move |ctxt| {
                                 next_state.action_expected_value(ctxt, next_action)
                             })
                         })
