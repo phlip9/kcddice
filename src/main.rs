@@ -439,21 +439,23 @@ enum Action {
 /// even without the `Context`; rather, the `Context` should be used only for
 /// optimizations or evaluation statistics.
 struct Context {
-    /// A recursion depth tracker to limit the search depth. Since it appears you
-    /// can actually start a new roll if you score and hold all the dice on the
-    /// board, then the game is no longer finite and isn't guaranteed to terminate.
-    /// This depth limit is then necessary for our search to terminate.
-    depth: u32,
-    /// The current joint probability of this evaluation path, i.e., `P(X_1, .., X_n)`
-    /// where `X_i` is the i'th random dice set drawn in this evaluation path.
-    /// We use this to limit searching of super low probability evaluation paths
-    /// (which also tend to explode our branching factor).
-    joint_path_prob: f64,
     /// A cache from (State, Action) pairs to their expected value after evaluation.
     /// This cache turns a 13sec evaluation into a 30ms evaluation.
     action_value_cache: HashMap<(State, Action), f64>,
     cache_hits: Cell<u64>,
     cache_misses: Cell<u64>,
+    /// A recursion depth tracker to limit the search depth. Since it appears you
+    /// can actually start a new roll if you score and hold all the dice on the
+    /// board, then the game is no longer finite and isn't guaranteed to terminate.
+    /// This depth limit is then necessary for our search to terminate.
+    depth: u32,
+    depth_prunes: Cell<u64>,
+    /// The current joint probability of this evaluation path, i.e., `P(X_1, .., X_n)`
+    /// where `X_i` is the i'th random dice set drawn in this evaluation path.
+    /// We use this to limit searching of super low probability evaluation paths
+    /// (which also tend to explode our branching factor).
+    joint_path_prob: f64,
+    joint_prob_prunes: Cell<u64>,
 }
 
 impl Context {
@@ -461,9 +463,11 @@ impl Context {
         Context {
             depth: 0,
             joint_path_prob: 1.0,
+            action_value_cache: HashMap::new(),
             cache_hits: Cell::new(0),
             cache_misses: Cell::new(0),
-            action_value_cache: HashMap::new(),
+            depth_prunes: Cell::new(0),
+            joint_prob_prunes: Cell::new(0),
         }
     }
 
@@ -480,6 +484,93 @@ impl Context {
 
         res
     }
+
+    #[inline]
+    fn depth_prunes(&self) -> u64 {
+        self.depth_prunes.get()
+    }
+
+    #[inline]
+    fn joint_prob_prunes(&self) -> u64 {
+        self.joint_prob_prunes.get()
+    }
+
+    #[inline]
+    fn should_prune(&self) -> bool {
+        if self.depth > 3 {
+            self.depth_prunes.set(self.depth_prunes() + 1);
+            return true;
+        }
+        if self.joint_path_prob < 1.0e-7 {
+            self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
+            return true;
+        }
+        return false;
+    }
+
+    // depth<=10
+    //                 action  held dice  exp v pbust
+    //              hold dice  [1]        426.4  0.08
+    //              hold dice  [5]        390.0  0.08
+    //              hold dice  [1, 1]     343.7  0.16
+    //              hold dice  [1, 5]     307.6  0.16
+    //              hold dice  [1, 1, 5]  293.4  0.28
+    //                   pass             250.0  0.00
+    //
+    //       actions explored  343141944
+    //         cache hit rate  0.388
+    //       depth prune rate  0.608
+    // joint prob. prune rate  0.000
+    //
+    // real    1m14.322s
+
+    // depth<=5
+    //                 action  held dice  exp v pbust
+    //              hold dice  [1]        425.8  0.08
+    //              hold dice  [5]        388.9  0.08
+    //              hold dice  [1, 1]     343.2  0.16
+    //              hold dice  [1, 5]     306.8  0.16
+    //              hold dice  [1, 1, 5]  292.6  0.28
+    //                   pass             250.0  0.00
+    //
+    //       actions explored  142571454
+    //         cache hit rate  0.361
+    //       depth prune rate  0.634
+    // joint prob. prune rate  0.000
+    //
+    // real    0m33.005s
+
+    // depth<=2
+    //                 action  held dice  exp v pbust
+    //              hold dice  [1]        418.0  0.08
+    //              hold dice  [5]        381.5  0.08
+    //              hold dice  [1, 1]     330.9  0.16
+    //              hold dice  [1, 5]     294.6  0.16
+    //              hold dice  [1, 1, 5]  289.5  0.28
+    //                   pass             250.0  0.00
+    //
+    //       actions explored  24037755
+    //         cache hit rate  0.278
+    //       depth prune rate  0.716
+    // joint prob. prune rate  0.000
+    //
+    // real    0m8.907s
+
+    // depth<=10  joint>=1e-5
+    //                 action  held dice  exp v pbust
+    //              hold dice  [1]        416.1  0.08
+    //              hold dice  [5]        379.4  0.08
+    //              hold dice  [1, 1]     331.0  0.16
+    //              hold dice  [1, 5]     294.0  0.16
+    //              hold dice  [1, 1, 5]  288.5  0.28
+    //                   pass             250.0  0.00
+    //
+    //       actions explored  3239875
+    //         cache hit rate  0.303
+    //       depth prune rate  0.000
+    // joint prob. prune rate  0.686
+    //
+    // real    0m4.829s
 
     #[inline]
     fn peek_cache(&self, key: &(State, Action)) -> Option<f64> {
@@ -508,13 +599,23 @@ impl Context {
     }
 
     #[inline]
-    fn cache_queries(&self) -> u64 {
+    fn actions_explored(&self) -> u64 {
         self.cache_hits() + self.cache_misses()
     }
 
     #[inline]
     fn cache_hit_rate(&self) -> f64 {
-        (self.cache_hits() as f64) / (self.cache_queries() as f64 + 1.0)
+        (self.cache_hits() as f64) / (self.actions_explored() as f64 + 1.0)
+    }
+
+    #[inline]
+    fn depth_prune_rate(&self) -> f64 {
+        (self.depth_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
+    }
+
+    #[inline]
+    fn joint_prob_prune_rate(&self) -> f64 {
+        (self.joint_prob_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
     }
 }
 
@@ -577,14 +678,9 @@ impl State {
         let expected_value = match action {
             Action::Pass => (self.my_round_total + self.rolled_dice.score()) as f64,
             Action::Roll(held_dice) => {
-                // limit search depth. if we pass the limit, just pretend this
-                // action always busts.
-                if ctxt.depth > 10 {
-                    return 0.0;
-                }
-
-                // limit search paths below a certain joint probability.
-                if ctxt.joint_path_prob < 1.0e-6 {
+                // prune deep paths and low joint probability paths. if we pass
+                // the limit, just pretend this action always busts.
+                if ctxt.should_prune() {
                     return 0.0;
                 }
 
@@ -763,14 +859,26 @@ fn main() {
             // display evaluation statistics
             table.add_heading("");
             table.add_row(row!(
-                "cache queries",
-                ctxt.cache_queries().to_string(),
+                "actions explored",
+                ctxt.actions_explored().to_string(),
                 "",
                 ""
             ));
             table.add_row(row!(
                 "cache hit rate",
                 format!("{:0.3}", ctxt.cache_hit_rate()),
+                "",
+                ""
+            ));
+            table.add_row(row!(
+                "depth prune rate",
+                format!("{:0.3}", ctxt.depth_prune_rate()),
+                "",
+                ""
+            ));
+            table.add_row(row!(
+                "joint prob. prune rate",
+                format!("{:0.3}", ctxt.joint_prob_prune_rate()),
                 "",
                 ""
             ));
