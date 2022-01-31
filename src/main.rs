@@ -219,7 +219,7 @@ impl Counts {
         let c5 = self.get_count(5);
         let c6 = self.get_count(6);
 
-        // check for straights
+        // check for pure straights and straights with 1 added scoring dice
         // [1 1 1 1 1 1]
         if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 1 {
             return 1500;
@@ -600,13 +600,36 @@ impl State {
         // we _can_ in fact hold all the dice, but they must all be scoring dice.
         let max_num_holds = self.rolled_dice.len();
 
+        // insight: it's (almost always) not rational to choose an action with a
+        // lower score but the same number of dice.
+        //
+        // for example, suppose we have [1,5] on the table. we then have 4 possible
+        // actions: [pass, roll[1], roll[5], roll[1,5]].
+        //
+        // consider roll[1] vs roll[5]
+        //
+        // choosing roll[1] means scoring 100 pts then rolling 1 die while
+        // roll[5] scores 50 pts and also rolls 1 die. (hypothesis) there's no
+        // reason to lose out on 50 pts by only holding 5.
+
+        let mut best_score_by_ndice = [0u16; 8];
+
         // the set of all possible dice we can hold from the board.
         // we must hold at least one die.
         let possible_holds = (1..=max_num_holds)
             .flat_map(|ndice| dice_multisets(self.rolled_dice, ndice))
-            // can only hold scoring dice
-            .filter(|held_dice| held_dice.exact_score() > 0)
-            .map(Action::Roll)
+            // only accept holds of scoring dice and the max score hold per hold size
+            .filter_map(|held_dice| {
+                let len = held_dice.len() as usize;
+                let score = held_dice.exact_score();
+                // this also handles rejecting zero score rolls (since strictly >)
+                if score > best_score_by_ndice[len] {
+                    best_score_by_ndice[len] = score;
+                    Some(Action::Roll(held_dice))
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
 
         let mut actions_vec = possible_holds;
@@ -679,6 +702,8 @@ impl State {
         ctxt.fill_cache((*self, action), expected_value);
         expected_value
     }
+
+    // TODO(philiphayes): handle holding all available dice correctly
 
     /// Evaluate the probability of "busting" immediately after applying the
     /// given `Action` to the current turn `State`.
@@ -987,10 +1012,7 @@ mod test {
         use super::Action::Pass;
         assert_eq!(vec![Pass, roll![1]], actions(&[1, 3]));
         assert_eq!(vec![Pass, roll![5]], actions(&[2, 3, 5, 6]));
-        assert_eq!(
-            vec![Pass, roll![1], roll![1, 5], roll![5]],
-            actions(&[1, 2, 3, 5, 6])
-        );
+        assert_eq!(vec![Pass, roll![1], roll![1, 5]], actions(&[1, 2, 3, 5, 6]));
         assert_eq!(vec![Pass, roll![1], roll![1, 1]], actions(&[1, 1, 3]));
         assert_eq!(vec![Pass, roll![1], roll![1, 1]], actions(&[1, 1, 3, 3]));
         assert_eq!(
@@ -1025,8 +1047,6 @@ mod test {
                 roll![1, 1, 2, 3, 4, 5],
                 roll![1, 1, 5],
                 roll![1, 2, 3, 4, 5],
-                roll![1, 5],
-                roll![5],
             ],
             actions(&[1, 1, 2, 3, 4, 5]),
         );
