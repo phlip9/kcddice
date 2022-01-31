@@ -14,10 +14,10 @@
 //! bust probabilities.
 //!
 //! The expected value in this case is the expectation of the turn total assuming
-//! the player maximizes their expected value.
+//! the player plays to maximize their expected value.
 //!
-//! The bust probability is the probability that no scoring dice are rolled
-//! assuming you choose the associated action.
+//! The bust probability is the probability that no scoring dice are rolled in
+//! the next turn, assuming the player choose the given action.
 
 use approx::relative_eq;
 use std::{
@@ -31,6 +31,7 @@ use tabular::{row, Table};
 /// The number of factorials to precompute in our static lookup table. Note this
 /// number is chosen so as not to overflow a u32.
 const NUM_FACTORIALS: usize = 13;
+
 /// A precomputed lookup table of factorials from `0 <= n < NUM_FACTORIALS`.
 /// `FACTORIAL_LT[n] = n!`.
 const FACTORIAL_LT: [u32; NUM_FACTORIALS] = precompute_factorials();
@@ -438,6 +439,11 @@ enum Action {
 /// even without the `Context`; rather, the `Context` should be used only for
 /// optimizations or evaluation statistics.
 struct Context {
+    /// A recursion depth tracker to limit the search depth. Since it appears you
+    /// can actually start a new roll if you score and hold all the dice on the
+    /// board, then the game is no longer finite and isn't guaranteed to terminate.
+    /// This depth limit is then necessary for our search to terminate.
+    depth: u32,
     /// A cache from (State, Action) pairs to their expected value after evaluation.
     /// This cache turns a 13sec evaluation into a 30ms evaluation.
     action_value_cache: HashMap<(State, Action), f64>,
@@ -448,10 +454,19 @@ struct Context {
 impl Context {
     fn new() -> Self {
         Context {
+            depth: 0,
             cache_hits: Cell::new(0),
             cache_misses: Cell::new(0),
             action_value_cache: HashMap::new(),
         }
+    }
+
+    #[inline]
+    fn with_next_depth<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.depth += 1;
+        let res = f(self);
+        self.depth -= 1;
+        res
     }
 
     #[inline]
@@ -549,6 +564,12 @@ impl State {
         let expected_value = match action {
             Action::Pass => (self.my_round_total + self.rolled_dice.score()) as f64,
             Action::Roll(held_dice) => {
+                // limit search depth. if we pass the limit, just pretend this
+                // action always busts.
+                if ctxt.depth > 20 {
+                    return 0.0;
+                }
+
                 // we have this many dice left to roll
                 let ndice_left = self.rolled_dice.len() - held_dice.len();
 
@@ -573,7 +594,11 @@ impl State {
                     let best_action_value = next_state
                         .actions()
                         .into_iter()
-                        .map(|next_action| next_state.action_expected_value(ctxt, next_action))
+                        .map(|next_action| {
+                            ctxt.with_next_depth(move |ctxt| {
+                                next_state.action_expected_value(ctxt, next_action)
+                            })
+                        })
                         .max_by(total_cmp_f64)
                         .unwrap_or(0.0);
 
