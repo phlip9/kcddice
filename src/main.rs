@@ -779,16 +779,17 @@ impl State {
         expected_value
     }
 
-    // TODO(philiphayes): handle holding all available dice correctly
-
     /// Evaluate the probability of "busting" immediately after applying the
     /// given `Action` to the current turn `State`.
+    ///
+    /// Fun fact: 3% chance to bust on your first roll : )
     fn action_p_bust(&self, action: Action) -> f64 {
         match action {
             Action::Pass => 0.0,
             Action::Roll(held_dice) => {
                 // we have this many dice left to roll
                 let ndice_left = self.rolled_dice.len() - held_dice.len();
+                let ndice_left = if ndice_left == 0 { 6 } else { ndice_left };
 
                 let mut p_bust = 0.0_f64;
                 for next_roll in AllDiceMultisetsIter::new(ndice_left) {
