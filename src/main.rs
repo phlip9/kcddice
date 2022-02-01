@@ -457,6 +457,9 @@ struct Context {
     action_value_cache: HashMap<NormalizedStateAction, f64>,
     actions_explored: u64,
     cache_hits: Cell<u64>,
+    /// The target score we're trying to hit.
+    target_score: u16,
+    game_finished_prunes: Cell<u64>,
     /// A recursion depth tracker to limit the search depth. Since it appears you
     /// can actually start a new roll if you score and hold all the dice on the
     /// board, then the game is no longer finite and isn't guaranteed to terminate.
@@ -476,6 +479,8 @@ struct Context {
 impl Context {
     fn new() -> Self {
         Context {
+            target_score: 4000,
+            game_finished_prunes: Cell::new(0),
             depth: 0,
             depth_max: 30,
             joint_path_prob: 1.0,
@@ -499,12 +504,21 @@ impl Context {
     }
 
     #[inline]
+    #[allow(unused)]
+    fn set_target_score(&mut self, target_score: u16) -> &mut Self {
+        self.target_score = target_score;
+        self
+    }
+
+    #[inline]
+    #[allow(unused)]
     fn set_depth_max(&mut self, depth_max: u32) -> &mut Self {
         self.depth_max = depth_max;
         self
     }
 
     #[inline]
+    #[allow(unused)]
     fn set_joint_prob_min(&mut self, joint_path_prob_min: f64) -> &mut Self {
         self.joint_path_prob_min = joint_path_prob_min;
         self
@@ -530,14 +544,26 @@ impl Context {
     }
 
     #[inline]
+    fn game_finished_prunes(&self) -> u64 {
+        self.game_finished_prunes.get()
+    }
+
+    #[inline]
     fn joint_prob_prunes(&self) -> u64 {
         self.joint_prob_prunes.get()
     }
 
     #[inline]
-    fn should_prune(&self) -> bool {
-        if self.depth > self.depth_max {
-            self.depth_prunes.set(self.depth_prunes() + 1);
+    fn should_prune(&self, my_round_total: u16) -> bool {
+        // TODO(philiphayes): is this still necessary?
+        // if self.depth > self.depth_max {
+        //     self.depth_prunes.set(self.depth_prunes() + 1);
+        //     return true;
+        // }
+        //
+        if my_round_total >= self.target_score {
+            self.game_finished_prunes
+                .set(self.game_finished_prunes.get() + 1);
             return true;
         }
         // TODO: is this still necessary?
@@ -583,6 +609,11 @@ impl Context {
     }
 
     #[inline]
+    fn game_finished_rate(&self) -> f64 {
+        (self.game_finished_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
+    }
+
+    #[inline]
     fn joint_prob_prune_rate(&self) -> f64 {
         (self.joint_prob_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
     }
@@ -611,6 +642,14 @@ struct NormalizedStateAction {
 }
 
 impl NormalizedStateAction {
+    /// An pseudo initial state, before rolling the first set of dice.
+    fn init_state() -> Self {
+        Self {
+            my_round_total: 0,
+            ndice_left: 6,
+        }
+    }
+
     #[allow(unused)]
     fn from_state_action(state: State, action: Action) -> Self {
         match action {
@@ -664,7 +703,7 @@ impl NormalizedStateAction {
         // pass
         if self.ndice_left == 0 {
             // expected value := P=1.0 * my_round_total
-            return self.my_round_total as f64;
+            return cmp::min(ctxt.target_score, self.my_round_total) as f64;
         }
 
         // check if the cache already contains this normalized (State, Action)
@@ -673,9 +712,9 @@ impl NormalizedStateAction {
             return action_value;
         }
 
-        // prune deep paths and low joint probability paths. if we pass
-        // the limit, just pretend this action always busts.
-        if ctxt.should_prune() {
+        // prune deep paths, low joint probability paths, and post-game finish
+        // paths. if we pass any limit, just pretend this action always busts.
+        if ctxt.should_prune(self.my_round_total) {
             return 0.0;
         }
 
@@ -814,16 +853,14 @@ impl State {
 
     /// For each possible `Action` from this `State`, conditioned on choosing that
     /// action, what is the expected turn score and bust probability?
-    fn actions_by_expected_value(&self) -> (Context, Vec<(Action, f64, f64)>) {
-        let mut ctxt = Context::new();
-
+    fn actions_by_expected_value(&self, ctxt: &mut Context) -> Vec<(Action, f64, f64)> {
         let mut actions_values = self
             .actions()
             .into_iter()
             .map(|action| {
                 (
                     action,
-                    self.action_expected_value(&mut ctxt, action),
+                    self.action_expected_value(ctxt, action),
                     self.action_p_bust(action),
                 )
             })
@@ -831,9 +868,20 @@ impl State {
 
         // sort by the expected turn score from highest to lowest.
         actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
-        (ctxt, actions_values)
+        actions_values
     }
 }
+
+/// Before even starting the game, what is our expected score?
+/// => 564.35
+#[allow(unused)]
+fn expected_score_a_priori(ctxt: &mut Context) -> f64 {
+    NormalizedStateAction::init_state().expected_value(ctxt)
+}
+
+// what is the distribution of the number of turns needed to reach a target score?
+// there's a new dynamic here, where the player should play more conservatively
+// when they're close
 
 fn usage() -> &'static str {
     "kcddice round-total rolled-dice\n\
@@ -889,7 +937,8 @@ fn main() {
 
     match parse_args(&args) {
         Ok(state) => {
-            let (ctxt, actions_values) = state.actions_by_expected_value();
+            let mut ctxt = Context::new();
+            let actions_values = state.actions_by_expected_value(&mut ctxt);
 
             let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
                 "action",
@@ -933,6 +982,12 @@ fn main() {
             table.add_row(row!(
                 "depth prune rate",
                 format!("{:0.3}", ctxt.depth_prune_rate()),
+                "",
+                ""
+            ));
+            table.add_row(row!(
+                "game finished rate",
+                format!("{:0.3}", ctxt.game_finished_rate()),
                 "",
                 ""
             ));
@@ -1156,13 +1211,13 @@ mod test {
         }
     }
 
-    #[test]
-    #[ignore]
-    fn test_actions_by_expected_value() {
-        let state = State::new(0, Counts::from_rolls(&[5, 5, 3, 3, 4]));
-
-        for tuple in state.actions_by_expected_value().1 {
-            println!("{:?}", tuple);
-        }
-    }
+    // #[test]
+    // #[ignore]
+    // fn test_actions_by_expected_value() {
+    //     let state = State::new(0, Counts::from_rolls(&[5, 5, 3, 3, 4]));
+    //
+    //     for tuple in state.actions_by_expected_value().1 {
+    //         println!("{:?}", tuple);
+    //     }
+    // }
 }
