@@ -761,16 +761,14 @@ impl State {
         for (next_state, p_roll) in norm_state_action.possible_roll_states() {
             // want to maximize expected value; choose action with
             // greatest expected value
-            let best_action_value = next_state
-                .actions()
-                .into_iter()
-                .map(|next_action| {
-                    ctxt.with_next_depth(p_roll, move |ctxt| {
-                        next_state.action_expected_value(ctxt, next_action)
-                    })
-                })
-                .max_by(total_cmp_f64)
-                .unwrap_or(0.0);
+            let best_action_value = ctxt.with_next_depth(p_roll, move |ctxt| {
+                next_state
+                    .actions()
+                    .into_iter()
+                    .map(|next_action| next_state.action_expected_value(ctxt, next_action))
+                    .max_by(total_cmp_f64)
+                    .unwrap_or(0.0)
+            });
 
             expected_value += p_roll * best_action_value;
         }
