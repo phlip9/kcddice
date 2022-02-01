@@ -462,12 +462,14 @@ struct Context {
     /// board, then the game is no longer finite and isn't guaranteed to terminate.
     /// This depth limit is then necessary for our search to terminate.
     depth: u32,
+    depth_max: u32,
     depth_prunes: Cell<u64>,
     /// The current joint probability of this evaluation path, i.e., `P(X_1, .., X_n)`
     /// where `X_i` is the i'th random dice set drawn in this evaluation path.
     /// We use this to limit searching of super low probability evaluation paths
     /// (which also tend to explode our branching factor).
     joint_path_prob: f64,
+    joint_path_prob_min: f64,
     joint_prob_prunes: Cell<u64>,
 }
 
@@ -475,7 +477,9 @@ impl Context {
     fn new() -> Self {
         Context {
             depth: 0,
+            depth_max: 30,
             joint_path_prob: 1.0,
+            joint_path_prob_min: 1.0e-10,
             action_value_cache: HashMap::new(),
             actions_explored: 0,
             cache_hits: Cell::new(0),
@@ -492,6 +496,18 @@ impl Context {
     #[inline]
     fn inc_actions_explored(&mut self) {
         self.actions_explored += 1;
+    }
+
+    #[inline]
+    fn set_depth_max(&mut self, depth_max: u32) -> &mut Self {
+        self.depth_max = depth_max;
+        self
+    }
+
+    #[inline]
+    fn set_joint_prob_min(&mut self, joint_path_prob_min: f64) -> &mut Self {
+        self.joint_path_prob_min = joint_path_prob_min;
+        self
     }
 
     #[inline]
@@ -520,12 +536,12 @@ impl Context {
 
     #[inline]
     fn should_prune(&self) -> bool {
-        if self.depth > 30 {
+        if self.depth > self.depth_max {
             self.depth_prunes.set(self.depth_prunes() + 1);
             return true;
         }
         // TODO: is this still necessary?
-        // if self.joint_path_prob < 1.0e-10 {
+        // if self.joint_path_prob < self.joint_path_prob_min {
         //     self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
         //     return true;
         // }
