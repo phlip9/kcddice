@@ -654,6 +654,54 @@ impl NormalizedStateAction {
         AllDiceMultisetsIter::new(self.ndice_left)
             .map(move |next_roll| (self.into_state(next_roll), next_roll.p_roll()))
     }
+
+    /// Given a normalized `(State, Action)` pair, evaluate the expected value
+    /// of applying the `Action` to the `State`, assuming we always choose
+    /// subsequent actions by maximum expected value.
+    fn expected_value(self, ctxt: &mut Context) -> f64 {
+        ctxt.inc_actions_explored();
+
+        // pass
+        if self.ndice_left == 0 {
+            // expected value := P=1.0 * my_round_total
+            return self.my_round_total as f64;
+        }
+
+        // check if the cache already contains this normalized (State, Action)
+        // pair.
+        if let Some(action_value) = ctxt.peek_cache(&self) {
+            return action_value;
+        }
+
+        // prune deep paths and low joint probability paths. if we pass
+        // the limit, just pretend this action always busts.
+        if ctxt.should_prune() {
+            return 0.0;
+        }
+
+        let mut expected_value = 0.0_f64;
+
+        // for all possible dice rolls
+        for (next_state, p_roll) in self.possible_roll_states() {
+            // want to maximize expected value; choose action with
+            // greatest expected value
+            let best_action_value = ctxt.with_next_depth(p_roll, move |ctxt| {
+                next_state
+                    .actions()
+                    .into_iter()
+                    .map(|next_action| {
+                        Self::from_state_action(next_state, next_action).expected_value(ctxt)
+                    })
+                    .max_by(total_cmp_f64)
+                    .unwrap_or(0.0)
+            });
+
+            expected_value += p_roll * best_action_value;
+        }
+
+        ctxt.fill_cache(self, expected_value);
+        expected_value
+    }
 }
 
 /// A representation of the player's turn state.
@@ -732,49 +780,11 @@ impl State {
         actions_vec
     }
 
-    /// Evaluate the expected value of applying the given `action` to the current
-    /// turn `State`.
+    /// Evaluate the expected value of applying this `Action` to the `State`,
+    /// assuming we always choose subsequent actions by maximum expected value.
+    #[inline]
     fn action_expected_value(&self, ctxt: &mut Context, action: Action) -> f64 {
-        ctxt.inc_actions_explored();
-
-        let held_dice = match action {
-            Action::Pass => return (self.my_round_total + self.rolled_dice.score()) as f64,
-            Action::Roll(held_dice) => held_dice,
-        };
-
-        // check if the cache already contains this (State, Action) pair, but use
-        // a normalized representation.
-        let norm_state_action = NormalizedStateAction::from_state_roll_action(*self, held_dice);
-        if let Some(action_value) = ctxt.peek_cache(&norm_state_action) {
-            return action_value;
-        }
-
-        // prune deep paths and low joint probability paths. if we pass
-        // the limit, just pretend this action always busts.
-        if ctxt.should_prune() {
-            return 0.0;
-        }
-
-        let mut expected_value = 0.0_f64;
-
-        // for all possible dice rolls
-        for (next_state, p_roll) in norm_state_action.possible_roll_states() {
-            // want to maximize expected value; choose action with
-            // greatest expected value
-            let best_action_value = ctxt.with_next_depth(p_roll, move |ctxt| {
-                next_state
-                    .actions()
-                    .into_iter()
-                    .map(|next_action| next_state.action_expected_value(ctxt, next_action))
-                    .max_by(total_cmp_f64)
-                    .unwrap_or(0.0)
-            });
-
-            expected_value += p_roll * best_action_value;
-        }
-
-        ctxt.fill_cache(norm_state_action, expected_value);
-        expected_value
+        NormalizedStateAction::from_state_action(*self, action).expected_value(ctxt)
     }
 
     /// Evaluate the probability of "busting" immediately after applying the
