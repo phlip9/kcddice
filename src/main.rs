@@ -452,11 +452,11 @@ enum Action {
 /// even without the `Context`; rather, the `Context` should be used only for
 /// optimizations or evaluation statistics.
 struct Context {
-    /// A cache from (State, Action) pairs to their expected value after evaluation.
-    /// This cache turns a 13sec evaluation into a 30ms evaluation.
-    action_value_cache: HashMap<(State, Action), f64>,
+    /// A cache from normalized (State, Action) pairs to their expected value
+    /// after evaluation.
+    action_value_cache: HashMap<NormalizedStateAction, f64>,
+    actions_explored: u64,
     cache_hits: Cell<u64>,
-    cache_misses: Cell<u64>,
     /// A recursion depth tracker to limit the search depth. Since it appears you
     /// can actually start a new roll if you score and hold all the dice on the
     /// board, then the game is no longer finite and isn't guaranteed to terminate.
@@ -477,11 +477,21 @@ impl Context {
             depth: 0,
             joint_path_prob: 1.0,
             action_value_cache: HashMap::new(),
+            actions_explored: 0,
             cache_hits: Cell::new(0),
-            cache_misses: Cell::new(0),
             depth_prunes: Cell::new(0),
             joint_prob_prunes: Cell::new(0),
         }
+    }
+
+    #[inline]
+    fn actions_explored(&self) -> u64 {
+        self.actions_explored
+    }
+
+    #[inline]
+    fn inc_actions_explored(&mut self) {
+        self.actions_explored += 1;
     }
 
     #[inline]
@@ -510,46 +520,40 @@ impl Context {
 
     #[inline]
     fn should_prune(&self) -> bool {
-        if self.depth > 3 {
+        if self.depth > 30 {
             self.depth_prunes.set(self.depth_prunes() + 1);
             return true;
         }
-        if self.joint_path_prob < 1.0e-7 {
-            self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
-            return true;
-        }
+        // TODO: is this still necessary?
+        // if self.joint_path_prob < 1.0e-10 {
+        //     self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
+        //     return true;
+        // }
         return false;
     }
 
     #[inline]
-    fn peek_cache(&self, key: &(State, Action)) -> Option<f64> {
+    fn peek_cache(&self, key: &NormalizedStateAction) -> Option<f64> {
         let out = self.action_value_cache.get(key).copied();
         if out.is_some() {
             self.cache_hits.set(self.cache_hits() + 1);
-        } else {
-            self.cache_misses.set(self.cache_misses() + 1);
         }
         out
     }
 
     #[inline]
-    fn fill_cache(&mut self, key: (State, Action), value: f64) {
+    fn fill_cache(&mut self, key: NormalizedStateAction, value: f64) {
         self.action_value_cache.insert(key, value);
+    }
+
+    #[inline]
+    fn cache_size(&self) -> usize {
+        self.action_value_cache.len()
     }
 
     #[inline]
     fn cache_hits(&self) -> u64 {
         self.cache_hits.get()
-    }
-
-    #[inline]
-    fn cache_misses(&self) -> u64 {
-        self.cache_misses.get()
-    }
-
-    #[inline]
-    fn actions_explored(&self) -> u64 {
-        self.cache_hits() + self.cache_misses()
     }
 
     #[inline]
@@ -568,6 +572,74 @@ impl Context {
     }
 }
 
+/// A normalized representation of a `(State, Action)` pair.
+///
+/// insight:  peek_cache(State {200, [1,1,5,X1,X2,X3]}, Roll[1,1,5])
+///       and peek_cache(State {200, [1,1,5,Y1,Y2,Y3]}, Roll[1,1,5]) should hit
+///       the same cache slot as long as all Xi and Yi aren't used by the action.
+///
+/// option 1: normalize the state representation only so _always_ non-scoring
+///           dice get lumped into the 0-bucket and only affect the length.
+///
+/// option 2: normalize the (state, action) representation
+///             (State {200, [1,1,5,2,2,3]}, Roll[1,1,5])
+///           ≡ StateAction { round_total=450, ndice_left=3 }
+///
+/// `NormalizedStateAction` is option 2.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+struct NormalizedStateAction {
+    /// The round total after applying the action.
+    pub my_round_total: u16,
+    /// The number of dice left to reroll after applying the action.
+    pub ndice_left: u8,
+}
+
+impl NormalizedStateAction {
+    #[allow(unused)]
+    fn from_state_action(state: State, action: Action) -> Self {
+        match action {
+            Action::Pass => Self {
+                my_round_total: state.my_round_total + state.rolled_dice.score(),
+                ndice_left: 0,
+            },
+            Action::Roll(held_dice) => Self::from_state_roll_action(state, held_dice),
+        }
+    }
+
+    #[inline]
+    fn from_state_roll_action(state: State, held_dice: Counts) -> Self {
+        // we have this many dice left to roll
+        let ndice_left = state.rolled_dice.len() - held_dice.len();
+
+        // apparently you can actually roll again with a fresh hand if
+        // you hold all the dice left and they're all scoring dice.
+        let ndice_left = if ndice_left == 0 { 6 } else { ndice_left };
+
+        Self {
+            // fold the held dice score into the round total
+            my_round_total: state.my_round_total + held_dice.exact_score(),
+            ndice_left,
+        }
+    }
+
+    #[inline]
+    fn into_state(self, rolled_dice: Counts) -> State {
+        State {
+            my_round_total: self.my_round_total,
+            rolled_dice,
+        }
+    }
+
+    /// Return an `Iterator` over all possible states reachable after rolling the
+    /// `ndice_left`, along with the conditional probability of reaching each
+    /// state.
+    #[inline]
+    fn possible_roll_states(self) -> impl Iterator<Item = (State, f64)> {
+        AllDiceMultisetsIter::new(self.ndice_left)
+            .map(move |next_roll| (self.into_state(next_roll), next_roll.p_roll()))
+    }
+}
+
 /// A representation of the player's turn state.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct State {
@@ -580,9 +652,6 @@ struct State {
 impl State {
     fn new(my_round_total: u16, rolled_dice: Counts) -> Self {
         Self {
-            // target_total,
-            // other_total: 0,
-            // my_total: 0,
             my_round_total,
             rolled_dice,
         }
@@ -612,6 +681,7 @@ impl State {
         // roll[5] scores 50 pts and also rolls 1 die. (hypothesis) there's no
         // reason to lose out on 50 pts by only holding 5.
 
+        // TODO(philiphayes): is this still necessary?
         let mut best_score_by_ndice = [0u16; 8];
 
         // the set of all possible dice we can hold from the board.
@@ -632,6 +702,12 @@ impl State {
             })
             .collect::<Vec<_>>();
 
+        // let possible_holds = (1..=max_num_holds)
+        //     .flat_map(|ndice| dice_multisets(self.rolled_dice, ndice))
+        //     .filter(|held_dice| held_dice.exact_score() > 0)
+        //     .map(Action::Roll)
+        //     .collect::<Vec<_>>();
+
         let mut actions_vec = possible_holds;
 
         // can always pass if we have some scores
@@ -643,63 +719,47 @@ impl State {
     /// Evaluate the expected value of applying the given `action` to the current
     /// turn `State`.
     fn action_expected_value(&self, ctxt: &mut Context, action: Action) -> f64 {
-        if let Some(action_value) = ctxt.peek_cache(&(*self, action)) {
+        ctxt.inc_actions_explored();
+
+        let held_dice = match action {
+            Action::Pass => return (self.my_round_total + self.rolled_dice.score()) as f64,
+            Action::Roll(held_dice) => held_dice,
+        };
+
+        // check if the cache already contains this (State, Action) pair, but use
+        // a normalized representation.
+        let norm_state_action = NormalizedStateAction::from_state_roll_action(*self, held_dice);
+        if let Some(action_value) = ctxt.peek_cache(&norm_state_action) {
             return action_value;
         }
 
-        let expected_value = match action {
-            Action::Pass => (self.my_round_total + self.rolled_dice.score()) as f64,
-            Action::Roll(held_dice) => {
-                // prune deep paths and low joint probability paths. if we pass
-                // the limit, just pretend this action always busts.
-                if ctxt.should_prune() {
-                    return 0.0;
-                }
+        // prune deep paths and low joint probability paths. if we pass
+        // the limit, just pretend this action always busts.
+        if ctxt.should_prune() {
+            return 0.0;
+        }
 
-                // we have this many dice left to roll
-                let ndice_left = self.rolled_dice.len() - held_dice.len();
+        let mut expected_value = 0.0_f64;
 
-                // apparently you can actually roll again with a fresh hand if
-                // you hold all the dice left and they're all scoring dice.
-                let ndice_left = if ndice_left == 0 { 6 } else { ndice_left };
+        // for all possible dice rolls
+        for (next_state, p_roll) in norm_state_action.possible_roll_states() {
+            // want to maximize expected value; choose action with
+            // greatest expected value
+            let best_action_value = next_state
+                .actions()
+                .into_iter()
+                .map(|next_action| {
+                    ctxt.with_next_depth(p_roll, move |ctxt| {
+                        next_state.action_expected_value(ctxt, next_action)
+                    })
+                })
+                .max_by(total_cmp_f64)
+                .unwrap_or(0.0);
 
-                // fold the held dice score into the round total
-                // the rolled_dice is just an empty placeholder at this point
-                let partial_state = State {
-                    my_round_total: self.my_round_total + held_dice.exact_score(),
-                    rolled_dice: Counts::new(),
-                };
+            expected_value += p_roll * best_action_value;
+        }
 
-                let mut expected_value = 0.0_f64;
-
-                // for all possible dice rolls
-                for next_roll in AllDiceMultisetsIter::new(ndice_left) {
-                    let p_roll = next_roll.p_roll();
-
-                    let mut next_state = partial_state;
-                    next_state.rolled_dice = next_roll;
-
-                    // want to maximize expected value; choose action with
-                    // greatest expected value
-                    let best_action_value = next_state
-                        .actions()
-                        .into_iter()
-                        .map(|next_action| {
-                            ctxt.with_next_depth(p_roll, move |ctxt| {
-                                next_state.action_expected_value(ctxt, next_action)
-                            })
-                        })
-                        .max_by(total_cmp_f64)
-                        .unwrap_or(0.0);
-
-                    expected_value += p_roll * best_action_value;
-                }
-
-                expected_value
-            }
-        };
-
-        ctxt.fill_cache((*self, action), expected_value);
+        ctxt.fill_cache(norm_state_action, expected_value);
         expected_value
     }
 
@@ -838,6 +898,7 @@ fn main() {
                 "",
                 ""
             ));
+            table.add_row(row!("cache size", ctxt.cache_size().to_string(), "", ""));
             table.add_row(row!(
                 "cache hit rate",
                 format!("{:0.3}", ctxt.cache_hit_rate()),
