@@ -29,6 +29,10 @@ use std::{
 };
 use tabular::{row, Table};
 
+///////////////////
+// Combinatorics //
+///////////////////
+
 /// The number of factorials to precompute in our static lookup table. Note this
 /// number is chosen so as not to overflow a u32.
 const NUM_FACTORIALS: usize = 13;
@@ -82,6 +86,10 @@ pub fn total_cmp_f64(a: &f64, b: &f64) -> cmp::Ordering {
 
     left.cmp(&right)
 }
+
+//////////////
+// Dice Set //
+//////////////
 
 /// A compressed representation of a set of dice, stored as counts of each die
 /// packed into a u32. Visually,
@@ -461,6 +469,10 @@ fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
     out
 }
 
+////////////
+// Action //
+////////////
+
 /// An `Action` represents any of the possible actions the player can take from a
 /// given round [`State`]. Note that a "bust" is simply the absence of any possible
 /// actions.
@@ -475,6 +487,10 @@ enum Action {
     /// rest. The held dice score is added to their current round total.
     Roll(Counts),
 }
+
+////////////////////////
+// Evaluation Context //
+////////////////////////
 
 /// The `Context` is some additional evaluation state passed along while evaluating
 /// `(state, action) -> expected value`. The evaluation should still be correct
@@ -664,6 +680,10 @@ impl Context {
     }
 }
 
+////////////////////////
+// Normalized Q-State //
+////////////////////////
+
 /// A normalized representation of a q-state / `(State, Action)` pair.
 ///
 /// insight:  peek_cache(State {200, [1,1,5,X1,X2,X3]}, Roll[1,1,5])
@@ -831,7 +851,11 @@ impl NormalizedStateAction {
     }
 }
 
-/// A representation of the player's turn state.
+/////////////////
+// Round State //
+/////////////////
+
+/// A representation of the player's round state.
 #[derive(Copy, Clone, Debug)]
 struct State {
     /// The set of dice the player just rolled.
@@ -848,8 +872,9 @@ impl State {
         }
     }
 
-    /// From the current turn `State` return the complete set of possible `Action`s
-    /// the player can take. Returns an empty set if the player has "busted".
+    /// From the current round `State` return the complete set of possible
+    /// `Action`s the player can take. Returns an empty set if the player has
+    /// "busted".
     fn actions(&self) -> Vec<Action> {
         // if this dice roll has no scores whatsoever, then there are no actions
         // (our turn has ended).
@@ -967,6 +992,10 @@ fn expected_score_a_priori(ctxt: &mut Context) -> f64 {
     NormalizedStateAction::init_state().expected_value(ctxt)
 }
 
+///////////////
+// Score PMF //
+///////////////
+
 #[derive(Clone, Debug)]
 struct ScorePMF(HashMap<u16, f64>);
 
@@ -1005,6 +1034,10 @@ impl ScorePMF {
         }
     }
 }
+
+/////////
+// CLI //
+/////////
 
 /// following our policy, what is the full distribution of possible turn scores?
 /// i.e., P(score = 0) = p_bust
