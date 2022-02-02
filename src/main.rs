@@ -25,6 +25,7 @@ use std::{
     cmp::{self, min},
     collections::HashMap,
     env, fmt,
+    str::FromStr,
 };
 use tabular::{row, Table};
 
@@ -319,6 +320,34 @@ impl cmp::Ord for Counts {
 impl cmp::PartialOrd for Counts {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// Parse a comma/space/tab separated list of dice into a `Counts` set.
+/// Enclosing brackets ('[' or ']') optional.
+impl FromStr for Counts {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut counts = Counts::new();
+
+        let s = s.trim_start_matches('[');
+        let s = s.trim_end_matches(']');
+
+        let splitters = &[',', ' ', '\n', '\t'];
+
+        for roll_str in s.split(splitters).filter(|s| !s.is_empty()) {
+            let roll = roll_str
+                .parse::<u8>()
+                .map_err(|err| format!("dice roll is not a valid integer: {}", err))?;
+            if (1..=6).contains(&roll) {
+                counts.add_count(roll, 1);
+            } else {
+                return Err(format!("roll is out of range [1, 6]: {}", roll));
+            }
+        }
+
+        Ok(counts)
     }
 }
 
@@ -994,27 +1023,6 @@ fn usage() -> &'static str {
     "
 }
 
-/// Parse a comma separated list of dice into a `Counts` set.
-fn parse_dice(s: &str) -> Result<Counts, String> {
-    let mut counts = Counts::new();
-
-    let s = s.trim_start_matches('[');
-    let s = s.trim_end_matches(']');
-
-    for roll_str in s.split(',') {
-        let roll = roll_str
-            .parse::<u8>()
-            .map_err(|err| format!("dice roll is not a valid integer: {}", err))?;
-        if (1..=6).contains(&roll) {
-            counts.add_count(roll, 1);
-        } else {
-            return Err(format!("roll is out of range [1, 6]: {}", roll));
-        }
-    }
-
-    Ok(counts)
-}
-
 fn parse_args(args: &[String]) -> Result<State, String> {
     match args {
         [round_total, rolled_dice] => {
@@ -1022,7 +1030,10 @@ fn parse_args(args: &[String]) -> Result<State, String> {
                 .parse()
                 .map_err(|err| format!("round-total is not a valid integer: {}", err))?;
 
-            let rolled_dice = parse_dice(rolled_dice)?;
+            let rolled_dice: Counts = rolled_dice
+                .parse()
+                .map_err(|err| format!("failed to parse round-state: {}", err))?;
+
             let state = State::new(round_total, rolled_dice);
 
             Ok(state)
