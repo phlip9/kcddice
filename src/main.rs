@@ -20,12 +20,14 @@
 //! the next turn, assuming the player choose the given action.
 
 use approx::relative_eq;
+use pico_args::Arguments;
 use std::{
     cell::Cell,
     cmp::{self, min},
     collections::HashMap,
-    env, fmt,
+    fmt,
     str::FromStr,
+    time::Instant,
 };
 use tabular::{row, Table};
 
@@ -1039,121 +1041,183 @@ impl ScorePMF {
 // CLI //
 /////////
 
-/// following our policy, what is the full distribution of possible turn scores?
-/// i.e., P(score = 0) = p_bust
-///       P(score = 50) = ...
-///       ...
-// fn turn_score_distribution() {
-//     // given a q-state (round_total, ndice_left)
-//
-//     // we're already tracking the joint probability
-// }
+trait Command: Sized {
+    const USAGE: &'static str;
 
-fn usage() -> &'static str {
-    "kcddice round-total rolled-dice\n\
-    \n\
-    example: kcddice 100 [1,1,3,4,6]\n\
-    "
+    fn parse_from_args(args: Arguments) -> Result<Self, String>;
+    fn run(self);
+
+    fn maybe_help(args: &mut Arguments) {
+        if args.contains(["-h", "--help"]) {
+            print!("{}", Self::USAGE);
+            std::process::exit(0);
+        }
+    }
 }
 
-fn parse_args(args: &[String]) -> Result<State, String> {
-    match args {
-        [round_total, rolled_dice] => {
-            let round_total: u16 = round_total
-                .parse()
-                .map_err(|err| format!("round-total is not a valid integer: {}", err))?;
+#[derive(Debug)]
+struct BestActionCommand {
+    round_total: u16,
+    rolled_dice: Counts,
+}
 
-            let rolled_dice: Counts = rolled_dice
-                .parse()
-                .map_err(|err| format!("failed to parse round-state: {}", err))?;
+impl Command for BestActionCommand {
+    const USAGE: &'static str = "\
+kcddice best-action - compute the best action to take in a round
 
-            let state = State::new(round_total, rolled_dice);
+USAGE:
+    kcddice best-action [option ...] <round-total> <rolled-dice>
 
-            Ok(state)
+EXAMPLE:
+    kcddice best-action 550 [1,1,2,3,5,6]
+
+OPTIONS:
+";
+
+    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
+        Self::maybe_help(&mut args);
+
+        let cmd = Self {
+            round_total: args.free_from_str().map_err(|err| err.to_string())?,
+            rolled_dice: args.free_from_str().map_err(|err| err.to_string())?,
+        };
+
+        let remaining = args.finish();
+        if !remaining.is_empty() {
+            return Err(format!("unexpected arguments left: '{:?}'", remaining));
         }
-        _ => Err(format!("Unexpected number of arguments: {}", args.len())),
+
+        Ok(cmd)
+    }
+
+    fn run(self) {
+        let state = State::new(self.round_total, self.rolled_dice);
+        let mut ctxt = Context::new();
+
+        let start_time = Instant::now();
+        let actions_values = state.actions_by_expected_value(&mut ctxt);
+        let search_duration = start_time.elapsed();
+
+        let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
+            "action",
+            "held dice",
+            "exp v",
+            "pbust"
+        ));
+
+        let len = actions_values.len();
+        for (action, value, p_bust) in actions_values.into_iter().take(10) {
+            let value_str = format!("{:0.1}", value);
+            let p_bust_str = format!("{:0.2}", p_bust);
+            let (action_str, dice_str) = match action {
+                Action::Pass => ("pass", String::new()),
+                Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
+            };
+            table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
+        }
+
+        // we only show the top 10 results, but display '...' to show that
+        // there were more.
+        if len > 10 {
+            table.add_row(row!("...", format!("(x {})", len - 10), "", ""));
+        }
+
+        // display evaluation statistics
+        table.add_heading("");
+        table.add_row(row!(
+            "search duration",
+            format!("{:.2?}", search_duration),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "actions explored",
+            ctxt.actions_explored().to_string(),
+            "",
+            ""
+        ));
+        table.add_row(row!("cache size", ctxt.cache_size().to_string(), "", ""));
+        table.add_row(row!(
+            "cache hit rate",
+            format!("{:0.3}", ctxt.cache_hit_rate()),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "depth prune rate",
+            format!("{:0.3}", ctxt.depth_prune_rate()),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "game finished rate",
+            format!("{:0.3}", ctxt.game_finished_rate()),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "joint prob. prune rate",
+            format!("{:0.3}", ctxt.joint_prob_prune_rate()),
+            "",
+            ""
+        ));
+
+        print!("\n{}", table);
+    }
+}
+
+#[derive(Debug)]
+enum BaseCommand {
+    BestAction(BestActionCommand),
+}
+
+impl Command for BaseCommand {
+    const USAGE: &'static str = "\
+kcddice - A utility for optimally playing the Kingdom Come: Deliverance dice game!
+
+USAGE:
+    kcddice [option ...] <subcommand>
+
+SUBCOMMANDS:
+    · kcddice best-action - compute the best action to take in a round
+";
+
+    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
+        let maybe_subcommand = args.subcommand().map_err(|err| err.to_string())?;
+
+        match maybe_subcommand.as_ref().map(String::as_str) {
+            Some("best-action") => Ok(Self::BestAction(BestActionCommand::parse_from_args(args)?)),
+            Some(command) => Err(format!("'{}' is not a recognized command", command)),
+            None => {
+                Self::maybe_help(&mut args);
+                Err(format!("no subcommand specified"))
+            }
+        }
+    }
+
+    fn run(self) {
+        match self {
+            Self::BestAction(cmd) => cmd.run(),
+        }
     }
 }
 
 fn main() {
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let args = pico_args::Arguments::from_env();
 
-    if Some("--help") == args.get(0).map(String::as_str) {
-        println!("usage: {}", usage());
-        return;
-    }
-
-    match parse_args(&args) {
-        Ok(state) => {
-            let mut ctxt = Context::new();
-            let actions_values = state.actions_by_expected_value(&mut ctxt);
-
-            let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
-                "action",
-                "held dice",
-                "exp v",
-                "pbust"
-            ));
-
-            let len = actions_values.len();
-            for (action, value, p_bust) in actions_values.into_iter().take(10) {
-                let value_str = format!("{:0.1}", value);
-                let p_bust_str = format!("{:0.2}", p_bust);
-                let (action_str, dice_str) = match action {
-                    Action::Pass => ("pass", String::new()),
-                    Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
-                };
-                table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
-            }
-
-            // we only show the top 10 results, but display '...' to show that
-            // there were more.
-            if len > 10 {
-                table.add_row(row!("...", format!("(x {})", len - 10), "", ""));
-            }
-
-            // display evaluation statistics
-            table.add_heading("");
-            table.add_row(row!(
-                "actions explored",
-                ctxt.actions_explored().to_string(),
-                "",
-                ""
-            ));
-            table.add_row(row!("cache size", ctxt.cache_size().to_string(), "", ""));
-            table.add_row(row!(
-                "cache hit rate",
-                format!("{:0.3}", ctxt.cache_hit_rate()),
-                "",
-                ""
-            ));
-            table.add_row(row!(
-                "depth prune rate",
-                format!("{:0.3}", ctxt.depth_prune_rate()),
-                "",
-                ""
-            ));
-            table.add_row(row!(
-                "game finished rate",
-                format!("{:0.3}", ctxt.game_finished_rate()),
-                "",
-                ""
-            ));
-            table.add_row(row!(
-                "joint prob. prune rate",
-                format!("{:0.3}", ctxt.joint_prob_prune_rate()),
-                "",
-                ""
-            ));
-
-            print!("\n{}", table);
-        }
+    match BaseCommand::parse_from_args(args) {
+        Ok(cmd) => cmd.run(),
         Err(err) => {
-            println!("Invalid arguments: {}", err);
-            println!("\nusage: {}", usage());
+            eprintln!("error: {}", err);
+            eprintln!("Try 'kcddice --help' for more information.");
+            std::process::exit(1);
         }
     }
 }
+
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod test {
