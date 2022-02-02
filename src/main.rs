@@ -505,8 +505,6 @@ struct Context {
     score_distr_cache: HashMap<NormalizedStateAction, ScorePMF>,
     actions_explored: u64,
     cache_hits: Cell<u64>,
-    /// The target score we're trying to hit.
-    target_score: u16,
     game_finished_prunes: Cell<u64>,
     /// A recursion depth tracker to limit the search depth. Since it appears you
     /// can actually start a new roll if you score and hold all the dice on the
@@ -527,7 +525,6 @@ struct Context {
 impl Context {
     fn new() -> Self {
         Context {
-            target_score: 4000,
             game_finished_prunes: Cell::new(0),
             depth: 0,
             depth_max: 30,
@@ -550,13 +547,6 @@ impl Context {
     #[inline]
     fn inc_actions_explored(&mut self) {
         self.actions_explored += 1;
-    }
-
-    #[inline]
-    #[allow(unused)]
-    fn set_target_score(&mut self, target_score: u16) -> &mut Self {
-        self.target_score = target_score;
-        self
     }
 
     #[inline]
@@ -603,14 +593,14 @@ impl Context {
     }
 
     #[inline]
-    fn should_prune(&self, my_round_total: u16) -> bool {
+    fn should_prune(&self, my_round_total: u16, target_score: u16) -> bool {
         // TODO(philiphayes): is this still necessary?
         // if self.depth > self.depth_max {
         //     self.depth_prunes.set(self.depth_prunes() + 1);
         //     return true;
         // }
         //
-        if my_round_total >= self.target_score {
+        if my_round_total >= target_score {
             self.game_finished_prunes
                 .set(self.game_finished_prunes.get() + 1);
             return true;
@@ -704,22 +694,27 @@ impl Context {
 struct NormalizedStateAction {
     /// The round total after applying the action.
     pub my_round_total: u16,
+    /// The total score we're trying to hit. If we meet or exceed this value,
+    /// then we win.
+    pub target_score: u16,
     /// The number of dice left to reroll after applying the action.
     pub ndice_left: u8,
 }
 
 impl NormalizedStateAction {
-    fn new(my_round_total: u16, ndice_left: u8) -> Self {
+    fn new(my_round_total: u16, target_score: u16, ndice_left: u8) -> Self {
         Self {
             my_round_total,
+            target_score,
             ndice_left,
         }
     }
 
     /// An pseudo initial state, before rolling the first set of dice.
-    fn init_state() -> Self {
+    fn init_state(target_score: u16) -> Self {
         Self {
             my_round_total: 0,
+            target_score,
             ndice_left: 6,
         }
     }
@@ -729,6 +724,7 @@ impl NormalizedStateAction {
         match action {
             Action::Pass => Self {
                 my_round_total: state.my_round_total + state.rolled_dice.score(),
+                target_score: state.target_score,
                 ndice_left: 0,
             },
             Action::Roll(held_dice) => Self::from_state_roll_action(state, held_dice),
@@ -747,6 +743,7 @@ impl NormalizedStateAction {
         Self {
             // fold the held dice score into the round total
             my_round_total: state.my_round_total + held_dice.exact_score(),
+            target_score: state.target_score,
             ndice_left,
         }
     }
@@ -755,6 +752,7 @@ impl NormalizedStateAction {
     fn into_state(self, rolled_dice: Counts) -> State {
         State {
             my_round_total: self.my_round_total,
+            target_score: self.target_score,
             rolled_dice,
         }
     }
@@ -781,7 +779,7 @@ impl NormalizedStateAction {
 
         if self.is_pass() {
             // expected value := P=1.0 * my_round_total
-            return cmp::min(ctxt.target_score, self.my_round_total) as f64;
+            return cmp::min(self.target_score, self.my_round_total) as f64;
         }
 
         // check if the cache already contains this normalized (State, Action)
@@ -792,7 +790,7 @@ impl NormalizedStateAction {
 
         // prune deep paths, low joint probability paths, and post-game finish
         // paths. if we pass any limit, just pretend this action always busts.
-        if ctxt.should_prune(self.my_round_total) {
+        if ctxt.should_prune(self.my_round_total, self.target_score) {
             return 0.0;
         }
 
@@ -824,7 +822,7 @@ impl NormalizedStateAction {
         ctxt.inc_actions_explored();
 
         if self.is_pass() {
-            let score = cmp::min(ctxt.target_score, self.my_round_total);
+            let score = cmp::min(self.target_score, self.my_round_total);
             return ScorePMF::constant(score);
         }
 
@@ -832,7 +830,7 @@ impl NormalizedStateAction {
             return pmf;
         }
 
-        if ctxt.should_prune(self.my_round_total) {
+        if ctxt.should_prune(self.my_round_total, self.target_score) {
             return ScorePMF::bust();
         }
 
@@ -875,13 +873,17 @@ struct State {
     pub rolled_dice: Counts,
     /// The player's current round score (accumulated from previous rolls in the turn).
     pub my_round_total: u16,
+    /// The total score we're trying to hit. If we meet or exceed this value,
+    /// then we win.
+    pub target_score: u16,
 }
 
 impl State {
-    fn new(my_round_total: u16, rolled_dice: Counts) -> Self {
+    fn new(my_round_total: u16, target_score: u16, rolled_dice: Counts) -> Self {
         Self {
-            my_round_total,
             rolled_dice,
+            my_round_total,
+            target_score,
         }
     }
 
@@ -1001,8 +1003,8 @@ impl State {
 /// Before even starting the game, what is our expected score?
 /// => 564.35
 #[allow(unused)]
-fn expected_score_a_priori(ctxt: &mut Context) -> f64 {
-    NormalizedStateAction::init_state().expected_value(ctxt)
+fn expected_score_a_priori(ctxt: &mut Context, target_score: u16) -> f64 {
+    NormalizedStateAction::init_state(target_score).expected_value(ctxt)
 }
 
 ///////////////
@@ -1073,6 +1075,7 @@ trait Command: Sized {
 #[derive(Debug)]
 struct BestActionCommand {
     round_total: u16,
+    target_score: u16,
     rolled_dice: Counts,
 }
 
@@ -1083,10 +1086,12 @@ kcddice best-action - compute the best action to take in a round
 USAGE:
     kcddice best-action [option ...] <round-total> <rolled-dice>
 
-EXAMPLE:
+EXAMPLES:
     kcddice best-action 550 [1,1,2,3,5,6]
 
 OPTIONS:
+    · --target-score / -t score (default: 4000)
+      The score needed to win the game
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
@@ -1095,6 +1100,10 @@ OPTIONS:
         let cmd = Self {
             round_total: args.free_from_str().map_err(|err| err.to_string())?,
             rolled_dice: args.free_from_str().map_err(|err| err.to_string())?,
+            target_score: args
+                .opt_value_from_str(["--target-score", "-t"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(4000),
         };
 
         let remaining = args.finish();
@@ -1106,7 +1115,7 @@ OPTIONS:
     }
 
     fn run(self) {
-        let state = State::new(self.round_total, self.rolled_dice);
+        let state = State::new(self.round_total, self.target_score, self.rolled_dice);
         let mut ctxt = Context::new();
 
         let start_time = Instant::now();
@@ -1184,6 +1193,7 @@ OPTIONS:
 #[derive(Debug)]
 struct ScoreDistrCommand {
     round_total: u16,
+    target_score: u16,
     ndice_left: u8,
 }
 
@@ -1192,7 +1202,7 @@ impl Command for ScoreDistrCommand {
 kcddice score-distr - TODO
 
 USAGE:
-    kcddice score-distr [option ...] <round-total> <ndice-left>
+    kcddice score-distr [option ...] <round-total> <target-score> <ndice-left>
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
@@ -1200,6 +1210,7 @@ USAGE:
 
         let cmd = Self {
             round_total: args.free_from_str().map_err(|err| err.to_string())?,
+            target_score: args.free_from_str().map_err(|err| err.to_string())?,
             ndice_left: args.free_from_str().map_err(|err| err.to_string())?,
         };
 
@@ -1212,7 +1223,8 @@ USAGE:
     }
 
     fn run(self) {
-        let qstate = NormalizedStateAction::new(self.round_total, self.ndice_left);
+        let qstate =
+            NormalizedStateAction::new(self.round_total, self.target_score, self.ndice_left);
 
         let mut ctxt = Context::new();
 
@@ -1423,7 +1435,7 @@ mod test {
     #[test]
     fn test_gen_actions() {
         fn actions(rolls: &[u8]) -> Vec<Action> {
-            let state = State::new(0, Counts::from_rolls(rolls));
+            let state = State::new(0, 4000, Counts::from_rolls(rolls));
             let mut actions = state.actions();
             actions.sort_unstable();
             actions
