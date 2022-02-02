@@ -20,6 +20,7 @@
 //! the next turn, assuming the player choose the given action.
 
 use approx::relative_eq;
+use ndarray::{s, Array1, Array2};
 use pico_args::Arguments;
 use std::{
     cell::Cell,
@@ -30,6 +31,8 @@ use std::{
     time::Instant,
 };
 use tabular::{row, Table};
+
+const DEFAULT_TARGET_SCORE: u16 = 4000;
 
 ///////////////////
 // Combinatorics //
@@ -1032,6 +1035,22 @@ impl ScorePMF {
         Self::constant(0)
     }
 
+    fn into_dense(&self, target_score: u16) -> Array1<f64> {
+        let num_states = MarkovMatrix::num_states(target_score);
+
+        let mut dense_pmf = Array1::zeros(num_states);
+
+        for state_idx in 0..num_states {
+            dense_pmf[state_idx] = self
+                .0
+                .get(&MarkovMatrix::i2s(state_idx))
+                .copied()
+                .unwrap_or(0.0);
+        }
+
+        dense_pmf
+    }
+
     fn expected_value(&self) -> f64 {
         self.0
             .iter()
@@ -1051,6 +1070,74 @@ impl ScorePMF {
 
     fn total_mass(&self) -> f64 {
         self.0.values().sum()
+    }
+}
+
+#[derive(Debug)]
+struct MarkovMatrix(Array2<f64>);
+
+impl MarkovMatrix {
+    /// score to state index
+    #[inline]
+    const fn s2i(score: u16) -> usize {
+        (score / 50) as usize
+    }
+
+    /// state index to score
+    #[inline]
+    const fn i2s(state_idx: usize) -> u16 {
+        (state_idx * 50) as u16
+    }
+
+    #[inline]
+    const fn num_states(target_score: u16) -> usize {
+        Self::s2i(target_score) + 1
+    }
+
+    fn from_optimal_policy(target_score: u16) -> Self {
+        let num_states = Self::num_states(target_score);
+
+        let mut matrix = Array2::zeros((num_states, num_states));
+
+        // compute the score distribution for each possible intermediate accumulated
+        // turn score, then assemble into a matrix where each column x_i is the
+        // score distribution pmf starting with turn score i*50.
+        for turn_score_idx in Self::s2i(0)..Self::s2i(target_score) {
+            let turn_score = Self::i2s(turn_score_idx);
+
+            let mut ctxt = Context::new();
+            let qstate = NormalizedStateAction::new(0, target_score - turn_score, 6);
+
+            let score_pmf = qstate
+                .score_distribution(&mut ctxt)
+                .into_dense(target_score);
+
+            matrix
+                .slice_mut(s![turn_score_idx.., turn_score_idx])
+                .assign(&score_pmf.slice(s![..num_states - turn_score_idx]));
+        }
+
+        // remember to set the absorber column [0 0 .. 1] last (if we've won the
+        // game, we stay in the win state forever).
+        matrix[[num_states - 1, num_states - 1]] = 1.0;
+
+        Self(matrix)
+    }
+
+    fn turns_to_win_cdf(&self, max_num_turns: usize) -> Array1<f64> {
+        let n = self.0.nrows();
+        let mut accum = Array2::<f64>::eye(n);
+
+        let mut turns_cdf = Array1::<f64>::zeros(max_num_turns);
+
+        for turn in 0..max_num_turns {
+            // A^i+1 = A^i * A
+            accum = accum.dot(&self.0);
+            // P[win on turn i] = (A^i · [1 0 .. 0]^T)_{n-1} = (A^i)_{n-1,0}
+            turns_cdf[turn] = accum[[n - 1, 0]];
+        }
+
+        turns_cdf
     }
 }
 
@@ -1103,7 +1190,7 @@ OPTIONS:
             target_score: args
                 .opt_value_from_str(["--target-score", "-t"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(4000),
+                .unwrap_or(DEFAULT_TARGET_SCORE),
         };
 
         let remaining = args.finish();
@@ -1258,9 +1345,90 @@ USAGE:
 }
 
 #[derive(Debug)]
+struct MarkovMatrixCommand {
+    target_score: u16,
+}
+
+impl Command for MarkovMatrixCommand {
+    // TODO(philiphayes): fill out
+    const USAGE: &'static str = "";
+
+    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
+        Self::maybe_help(&mut args);
+
+        let cmd = Self {
+            target_score: args
+                .opt_free_from_str()
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DEFAULT_TARGET_SCORE),
+        };
+
+        let remaining = args.finish();
+        if !remaining.is_empty() {
+            return Err(format!("unexpected arguments left: '{:?}'", remaining));
+        }
+
+        Ok(cmd)
+    }
+
+    fn run(self) {
+        let start_time = Instant::now();
+        let matrix = MarkovMatrix::from_optimal_policy(self.target_score);
+        let search_duration = start_time.elapsed();
+
+        println!("{:?}", matrix);
+        println!("\nsearch duration  {:.2?}", search_duration);
+    }
+}
+
+#[derive(Debug)]
+struct TurnsCdfCommand {
+    target_score: u16,
+    max_num_turns: usize,
+}
+
+impl Command for TurnsCdfCommand {
+    // TODO(philiphayes): fill out
+    const USAGE: &'static str = "";
+
+    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
+        Self::maybe_help(&mut args);
+
+        let cmd = Self {
+            target_score: args.free_from_str().map_err(|err| err.to_string())?,
+            max_num_turns: args.free_from_str().map_err(|err| err.to_string())?,
+        };
+
+        let remaining = args.finish();
+        if !remaining.is_empty() {
+            return Err(format!("unexpected arguments left: '{:?}'", remaining));
+        }
+
+        Ok(cmd)
+    }
+
+    fn run(self) {
+        let start_time = Instant::now();
+        let matrix = MarkovMatrix::from_optimal_policy(self.target_score);
+        let turns_cdf = matrix.turns_to_win_cdf(self.max_num_turns);
+        let search_duration = start_time.elapsed();
+
+        println!("turn\tcumulative probability");
+
+        for turn in 1..=self.max_num_turns {
+            println!("{}\t{}", turn, turns_cdf[turn - 1]);
+        }
+
+        eprintln!("\nsearch duration  {:.2?}", search_duration);
+    }
+}
+
+#[derive(Debug)]
 enum BaseCommand {
     BestAction(BestActionCommand),
     ScoreDistr(ScoreDistrCommand),
+    MarkovMatrix(MarkovMatrixCommand),
+    TurnsCdf(TurnsCdfCommand),
 }
 
 impl Command for BaseCommand {
@@ -1273,6 +1441,8 @@ USAGE:
 SUBCOMMANDS:
     · kcddice best-action - compute the best action to take in a round
     · kcddice score-distr - compute full score PMF given the score and number of dice left to roll
+    · kcddice markov-matrix - TODO
+    · kcddice turns-cdf - TODO
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
@@ -1281,6 +1451,10 @@ SUBCOMMANDS:
         match maybe_subcommand.as_deref() {
             Some("best-action") => Ok(Self::BestAction(BestActionCommand::parse_from_args(args)?)),
             Some("score-distr") => Ok(Self::ScoreDistr(ScoreDistrCommand::parse_from_args(args)?)),
+            Some("markov-matrix") => Ok(Self::MarkovMatrix(MarkovMatrixCommand::parse_from_args(
+                args,
+            )?)),
+            Some("turns-cdf") => Ok(Self::TurnsCdf(TurnsCdfCommand::parse_from_args(args)?)),
             Some(command) => Err(format!("'{}' is not a recognized command", command)),
             None => {
                 Self::maybe_help(&mut args);
@@ -1293,6 +1467,8 @@ SUBCOMMANDS:
         match self {
             Self::BestAction(cmd) => cmd.run(),
             Self::ScoreDistr(cmd) => cmd.run(),
+            Self::MarkovMatrix(cmd) => cmd.run(),
+            Self::TurnsCdf(cmd) => cmd.run(),
         }
     }
 }
@@ -1435,7 +1611,7 @@ mod test {
     #[test]
     fn test_gen_actions() {
         fn actions(rolls: &[u8]) -> Vec<Action> {
-            let state = State::new(0, 4000, Counts::from_rolls(rolls));
+            let state = State::new(0, DEFAULT_TARGET_SCORE, Counts::from_rolls(rolls));
             let mut actions = state.actions();
             actions.sort_unstable();
             actions
