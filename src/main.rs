@@ -455,6 +455,7 @@ struct Context {
     /// A cache from normalized (State, Action) pairs to their expected value
     /// after evaluation.
     action_value_cache: HashMap<NormalizedStateAction, f64>,
+    score_distr_cache: HashMap<NormalizedStateAction, ScorePMF>,
     actions_explored: u64,
     cache_hits: Cell<u64>,
     /// The target score we're trying to hit.
@@ -486,6 +487,7 @@ impl Context {
             joint_path_prob: 1.0,
             joint_path_prob_min: 1.0e-10,
             action_value_cache: HashMap::new(),
+            score_distr_cache: HashMap::new(),
             actions_explored: 0,
             cache_hits: Cell::new(0),
             depth_prunes: Cell::new(0),
@@ -589,6 +591,20 @@ impl Context {
     }
 
     #[inline]
+    fn peek_score_distr_cache(&self, key: &NormalizedStateAction) -> Option<ScorePMF> {
+        let out = self.score_distr_cache.get(key).cloned();
+        if out.is_some() {
+            self.cache_hits.set(self.cache_hits() + 1);
+        }
+        out
+    }
+
+    #[inline]
+    fn fill_score_distr_cache(&mut self, key: NormalizedStateAction, pmf: ScorePMF) {
+        self.score_distr_cache.insert(key, pmf);
+    }
+
+    #[inline]
     fn cache_size(&self) -> usize {
         self.action_value_cache.len()
     }
@@ -619,7 +635,7 @@ impl Context {
     }
 }
 
-/// A normalized representation of a `(State, Action)` pair.
+/// A normalized representation of a q-state / `(State, Action)` pair.
 ///
 /// insight:  peek_cache(State {200, [1,1,5,X1,X2,X3]}, Roll[1,1,5])
 ///       and peek_cache(State {200, [1,1,5,Y1,Y2,Y3]}, Roll[1,1,5]) should hit
@@ -685,6 +701,11 @@ impl NormalizedStateAction {
         }
     }
 
+    #[inline]
+    fn is_pass(self) -> bool {
+        self.ndice_left == 0
+    }
+
     /// Return an `Iterator` over all possible states reachable after rolling the
     /// `ndice_left`, along with the conditional probability of reaching each
     /// state.
@@ -700,8 +721,7 @@ impl NormalizedStateAction {
     fn expected_value(self, ctxt: &mut Context) -> f64 {
         ctxt.inc_actions_explored();
 
-        // pass
-        if self.ndice_left == 0 {
+        if self.is_pass() {
             // expected value := P=1.0 * my_round_total
             return cmp::min(ctxt.target_score, self.my_round_total) as f64;
         }
@@ -741,10 +761,49 @@ impl NormalizedStateAction {
         ctxt.fill_cache(self, expected_value);
         expected_value
     }
+
+    fn score_distribution(self, ctxt: &mut Context) -> ScorePMF {
+        ctxt.inc_actions_explored();
+
+        if self.is_pass() {
+            let score = cmp::min(ctxt.target_score, self.my_round_total);
+            return ScorePMF::constant(score);
+        }
+
+        if let Some(pmf) = ctxt.peek_score_distr_cache(&self) {
+            return pmf;
+        }
+
+        if ctxt.should_prune(self.my_round_total) {
+            return ScorePMF::bust();
+        }
+
+        let mut score_pmf = ScorePMF::new();
+
+        for (next_state, p_roll) in self.possible_roll_states() {
+            let (_best_exp_value, best_score_distr) = ctxt.with_next_depth(p_roll, move |ctxt| {
+                next_state
+                    .actions()
+                    .into_iter()
+                    .map(|next_action| {
+                        let distr = Self::from_state_action(next_state, next_action)
+                            .score_distribution(ctxt);
+                        (distr.expected_value(), distr)
+                    })
+                    .max_by(|(v1, _), (v2, _)| total_cmp_f64(v1, v2))
+                    .unwrap_or_else(|| (0.0, ScorePMF::bust()))
+            });
+
+            score_pmf.add_conditional_distr(p_roll, &best_score_distr);
+        }
+
+        ctxt.fill_score_distr_cache(self, score_pmf.clone());
+        score_pmf
+    }
 }
 
 /// A representation of the player's turn state.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug)]
 struct State {
     /// The set of dice the player just rolled.
     pub rolled_dice: Counts,
@@ -879,9 +938,54 @@ fn expected_score_a_priori(ctxt: &mut Context) -> f64 {
     NormalizedStateAction::init_state().expected_value(ctxt)
 }
 
-// what is the distribution of the number of turns needed to reach a target score?
-// there's a new dynamic here, where the player should play more conservatively
-// when they're close
+#[derive(Clone, Debug)]
+struct ScorePMF(HashMap<u16, f64>);
+
+impl ScorePMF {
+    #[inline]
+    fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    #[inline]
+    fn constant(score: u16) -> Self {
+        let mut pmf = HashMap::new();
+        pmf.insert(score, 1.0);
+        Self(pmf)
+    }
+
+    #[inline]
+    fn bust() -> Self {
+        Self::constant(0)
+    }
+
+    fn expected_value(&self) -> f64 {
+        self.0
+            .iter()
+            .map(|(&score, &p_score)| p_score * (score as f64))
+            .sum()
+    }
+
+    fn add_conditional_distr(&mut self, p_cond: f64, cond_distr: &Self) {
+        use std::ops::AddAssign;
+        for (&score, &p_score) in &cond_distr.0 {
+            self.0
+                .entry(score)
+                .or_insert(0.0)
+                .add_assign(p_cond * p_score);
+        }
+    }
+}
+
+/// following our policy, what is the full distribution of possible turn scores?
+/// i.e., P(score = 0) = p_bust
+///       P(score = 50) = ...
+///       ...
+// fn turn_score_distribution() {
+//     // given a q-state (round_total, ndice_left)
+//
+//     // we're already tracking the joint probability
+// }
 
 fn usage() -> &'static str {
     "kcddice round-total rolled-dice\n\
