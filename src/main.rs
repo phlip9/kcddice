@@ -620,7 +620,7 @@ impl Context {
         //     self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
         //     return true;
         // }
-        return false;
+        false
     }
 
     #[inline]
@@ -709,6 +709,13 @@ struct NormalizedStateAction {
 }
 
 impl NormalizedStateAction {
+    fn new(my_round_total: u16, ndice_left: u8) -> Self {
+        Self {
+            my_round_total,
+            ndice_left,
+        }
+    }
+
     /// An pseudo initial state, before rolling the first set of dice.
     fn init_state() -> Self {
         Self {
@@ -852,6 +859,10 @@ impl NormalizedStateAction {
         score_pmf
     }
 }
+
+// TODO(philiphayes): probably fold the target score back into the state, so
+// caches can be used across turns? wouldn't that add like n^2 # cache entries?
+// what is wrong with adding points_needed_to_win vs round_total?
 
 /////////////////
 // Round State //
@@ -1035,6 +1046,10 @@ impl ScorePMF {
                 .add_assign(p_cond * p_score);
         }
     }
+
+    fn total_mass(&self) -> f64 {
+        self.0.values().sum()
+    }
 }
 
 /////////
@@ -1167,8 +1182,73 @@ OPTIONS:
 }
 
 #[derive(Debug)]
+struct ScoreDistrCommand {
+    round_total: u16,
+    ndice_left: u8,
+}
+
+impl Command for ScoreDistrCommand {
+    const USAGE: &'static str = "\
+kcddice score-distr - TODO
+
+USAGE:
+    kcddice score-distr [option ...] <round-total> <ndice-left>
+";
+
+    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
+        Self::maybe_help(&mut args);
+
+        let cmd = Self {
+            round_total: args.free_from_str().map_err(|err| err.to_string())?,
+            ndice_left: args.free_from_str().map_err(|err| err.to_string())?,
+        };
+
+        let remaining = args.finish();
+        if !remaining.is_empty() {
+            return Err(format!("unexpected arguments left: '{:?}'", remaining));
+        }
+
+        Ok(cmd)
+    }
+
+    fn run(self) {
+        let qstate = NormalizedStateAction::new(self.round_total, self.ndice_left);
+
+        let mut ctxt = Context::new();
+
+        let start_time = Instant::now();
+        let score_pmf = qstate.score_distribution(&mut ctxt);
+        let search_duration = start_time.elapsed();
+
+        let mut dense_score_pmf = score_pmf.0.clone().into_iter().collect::<Vec<_>>();
+        dense_score_pmf.sort_unstable_by(|(s1, _), (s2, _)| s1.cmp(s2));
+
+        for (score, p_score) in dense_score_pmf {
+            println!("{}\t{}", score, p_score);
+        }
+
+        let mut table = Table::new("{:>}  {:<}");
+        table.add_row(row!(
+            "pmf expected value",
+            format!("{:.3}", score_pmf.expected_value())
+        ));
+        table.add_row(row!(
+            "pmf total mass",
+            format!("{}", score_pmf.total_mass())
+        ));
+        table.add_row(row!("search duration", format!("{:.2?}", search_duration)));
+        table.add_row(row!(
+            "actions explored",
+            ctxt.actions_explored().to_string()
+        ));
+        eprint!("\n{}", table);
+    }
+}
+
+#[derive(Debug)]
 enum BaseCommand {
     BestAction(BestActionCommand),
+    ScoreDistr(ScoreDistrCommand),
 }
 
 impl Command for BaseCommand {
@@ -1180,17 +1260,19 @@ USAGE:
 
 SUBCOMMANDS:
     · kcddice best-action - compute the best action to take in a round
+    · kcddice score-distr - compute full score PMF given the score and number of dice left to roll
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
         let maybe_subcommand = args.subcommand().map_err(|err| err.to_string())?;
 
-        match maybe_subcommand.as_ref().map(String::as_str) {
+        match maybe_subcommand.as_deref() {
             Some("best-action") => Ok(Self::BestAction(BestActionCommand::parse_from_args(args)?)),
+            Some("score-distr") => Ok(Self::ScoreDistr(ScoreDistrCommand::parse_from_args(args)?)),
             Some(command) => Err(format!("'{}' is not a recognized command", command)),
             None => {
                 Self::maybe_help(&mut args);
-                Err(format!("no subcommand specified"))
+                Err("no subcommand specified".to_string())
             }
         }
     }
@@ -1198,6 +1280,7 @@ SUBCOMMANDS:
     fn run(self) {
         match self {
             Self::BestAction(cmd) => cmd.run(),
+            Self::ScoreDistr(cmd) => cmd.run(),
         }
     }
 }
