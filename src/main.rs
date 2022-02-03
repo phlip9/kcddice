@@ -20,7 +20,7 @@
 //! the next turn, assuming the player choose the given action.
 
 use approx::relative_eq;
-use ndarray::{s, Array1, Array2};
+use ndarray::{s, Array1, Array2, ArrayView1};
 use pico_args::Arguments;
 use std::{
     cell::Cell,
@@ -1141,6 +1141,35 @@ impl MarkovMatrix {
     }
 }
 
+/// Given `X_1` and `X_2` random variables defined by the same CDF `cdf`, returns
+/// the `Pr[X_1 <= X_2]`.
+fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
+    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
+    let p = 0.0;
+
+    // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
+    let c_i1 = 0.0;
+
+    let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
+        // c_i = cdf[i]
+
+        // p_1 = Pr[X_1 = x_i]
+        //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
+        //     = cdf[i] - cdf[i - 1]
+        let p_1 = c_i - c_i1;
+
+        // p_2 = Pr[X_2 >= x_i]
+        //     = 1 - Pr[X_2 < x_i]
+        //     = 1 - Pr[X_2 <= prev(x_i)]
+        //     = 1 - cdf[i - 1]
+        let p_2 = 1.0 - c_i1;
+
+        (p + (p_1 * p_2), c_i)
+    });
+
+    p
+}
+
 /////////
 // CLI //
 /////////
@@ -1419,7 +1448,19 @@ impl Command for TurnsCdfCommand {
             println!("{}\t{}", turn, turns_cdf[turn - 1]);
         }
 
-        eprintln!("\nsearch duration  {:.2?}", search_duration);
+        // Assuming we play against ourselves and always go first, what is our a
+        // priori win probability (before we even roll the first dice)? This is
+        // useful for deciding how much to bet (e.g., following the
+        // Kelley-Criterion).
+        //
+        // For the typical setup (target=4000, 6 normal dice), this is ≈0.562.
+        // The Kelley-Criterion optimal bet is then 12.5% of your total wealth.
+        let p_win = p_rv_lte_itself(turns_cdf.view());
+
+        let mut table = Table::new("{:>}  {:<}");
+        table.add_row(row!("search_duration", format!("{:.2?}", search_duration)));
+        table.add_row(row!("Pr[win]", format!("{}", p_win)));
+        eprintln!("\n{}", table);
     }
 }
 
@@ -1692,6 +1733,12 @@ mod test {
                 epsilon = 1e-10,
             );
         }
+    }
+
+    #[test]
+    fn test_p_rv_lte_itself() {
+        let cdf = Array1::from_vec(vec![0.1, 0.6, 1.0]);
+        assert_relative_eq!(0.71, p_rv_lte_itself(cdf.view()));
     }
 
     // #[test]
