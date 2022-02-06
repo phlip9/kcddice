@@ -20,6 +20,7 @@
 //! the next turn, assuming the player choose the given action.
 
 use approx::relative_eq;
+use itertools;
 use ndarray::{s, Array1, Array2, ArrayView1};
 use pico_args::Arguments;
 use std::{
@@ -31,6 +32,7 @@ use std::{
     time::Instant,
 };
 use tabular::{row, Table};
+use tinyvec::ArrayVec;
 
 const DEFAULT_TARGET_SCORE: u16 = 4000;
 
@@ -66,18 +68,22 @@ const fn factorial(n: u32) -> u32 {
     FACTORIAL_LT[n as usize]
 }
 
-/// `n choose k` without replacement.
+/// count `n choose k` without replacement.
 #[cfg(test)]
 const fn num_combinations(n: u32, k: u32) -> u32 {
     factorial(n) / (factorial(k) * factorial(n - k))
 }
 
-/// `n choose k` with replacement.
+/// count `n choose k` with replacement. also known as `n multichoose k`.
 #[cfg(test)]
 #[inline]
 const fn num_multisets(n: u32, k: u32) -> u32 {
     num_combinations(n + k - 1, k)
 }
+
+////////////////////////////
+// Unstable std functions //
+////////////////////////////
 
 /// A total ordering on f64's. Needed until `f64::total_cmp` is stabilized.
 /// See: (https://doc.rust-lang.org/stable/std/primitive.f64.html#method.total_cmp)
@@ -92,9 +98,548 @@ pub fn total_cmp_f64(a: &f64, b: &f64) -> cmp::Ordering {
     left.cmp(&right)
 }
 
+/// Returns `true` if the iterator `iter` is sorted, according to the comparator
+/// function `compare`, i.e., `x_1 <= x2 <= ... <= x_n`.
+// TODO(philiphayes): use `std::slice::is_sorted_by` when it stabilizes.
+fn is_sorted_by<T, F>(mut iter: impl Iterator<Item = T>, mut compare: F) -> bool
+where
+    F: FnMut(&T, &T) -> Option<cmp::Ordering>,
+{
+    let mut prev = match iter.next() {
+        Some(first) => first,
+        None => return true,
+    };
+
+    for next in iter {
+        if let Some(cmp::Ordering::Greater) | None = compare(&prev, &next) {
+            return false;
+        }
+        prev = next;
+    }
+
+    true
+}
+
 //////////////
 // Dice Set //
 //////////////
+
+struct DieDistr([f64; 8]);
+
+impl DieDistr {
+    const fn new(distr: [f64; 6]) -> Self {
+        Self([
+            0.0, distr[0], distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
+        ])
+    }
+
+    const fn new_joker(distr: [f64; 6]) -> Self {
+        Self([
+            distr[0], 0.0, distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
+        ])
+    }
+
+    const fn p_face(&self, face: u8) -> f64 {
+        self.0[face as usize]
+    }
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum DieKind {
+    Standard,
+    HeavenlyKingdomDie,
+    OddDie,
+    // ..
+}
+
+impl Default for DieKind {
+    fn default() -> Self {
+        Self::Standard
+    }
+}
+
+impl DieKind {
+    fn from_memnonic(s: &str) -> Option<Self> {
+        let kind = match s {
+            "" => Self::Standard,
+            "hk" => Self::HeavenlyKingdomDie,
+            "o" => Self::OddDie,
+            _ => return None,
+        };
+        Some(kind)
+    }
+
+    fn as_memnonic(self) -> &'static str {
+        match self {
+            Self::Standard => "",
+            Self::HeavenlyKingdomDie => "hk",
+            Self::OddDie => "o",
+        }
+    }
+
+    fn die_distr(self) -> DieDistr {
+        // not all dice probabilities on the wiki add up to 1.0 exactly, so
+        // without better info, I'm going to slightly bias the dice against 1
+        // and 5 (the best rolls) to make everything add up : )
+
+        match self {
+            Self::Standard => DieDistr::new([1.0 / 6.0; 6]),
+            Self::HeavenlyKingdomDie => DieDistr::new([0.368, 0.105, 0.105, 0.105, 0.105, 0.212]),
+            Self::OddDie => DieDistr::new([
+                4.0 / 15.0,
+                1.0 / 15.0,
+                4.0 / 15.0,
+                1.0 / 15.0,
+                4.0 / 15.0,
+                1.0 / 15.0,
+            ]),
+        }
+    }
+}
+
+impl fmt::Display for DieKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_memnonic())
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct DieKindCounts(ArrayVec<[(DieKind, u8); 6]>);
+
+impl DieKindCounts {
+    fn ndice(&self) -> u8 {
+        self.0
+            .into_iter()
+            .map(|(_kind, kind_count)| kind_count)
+            .sum()
+    }
+
+    fn from_dice_vec(dice: DiceVec) -> Self {
+        Self(
+            dice.group_by_die_kind()
+                .map(|(kind, kind_dice)| (kind, kind_dice.len()))
+                .collect(),
+        )
+    }
+
+    fn spread_face(&self, face: u8) -> DiceVec {
+        let mut dice = DiceVec::new();
+        for (kind, nkind) in self.0.into_iter() {
+            dice.push_n_die(Die::new(face, kind), nkind);
+        }
+        dice
+    }
+
+    fn sub_count(&mut self, kind: DieKind, nkind: u8) {
+        use std::ops::SubAssign;
+        let (kind2, nkind2) = self
+            .0
+            .iter_mut()
+            .find(|(kind2, _nkind2)| kind == *kind2)
+            .unwrap();
+        nkind2.sub_assign(nkind);
+    }
+
+    fn sub_counts(&mut self, other: Self) {
+        for (kind, nkind) in other.0.into_iter() {
+            self.sub_count(kind, nkind);
+        }
+    }
+
+    fn num_multisets(&self, nfaces: u32) -> u32 {
+        // (6 multichoose k1) * (6 multichoose k2) * ..
+        self.0
+            .into_iter()
+            .map(|(_kind, nkind)| num_multisets(nfaces, nkind as u32))
+            .product()
+    }
+
+    fn all_multisets(&self) -> Vec<DiceVec> {
+        fn rec(
+            cb: &mut impl FnMut(DiceVec),
+            acc: DiceVec,
+            kind_counts: DieKindCounts,
+            current_face: u8,
+        ) {
+            let ndice = kind_counts.ndice();
+
+            // time to return the accumulator
+            if ndice == 0 {
+                cb(acc);
+                return;
+            // no more die faces
+            } else if current_face > 6 {
+                return;
+            }
+
+            // "spread" the current face across the possible dice kinds
+            // like [_: 3, hk: 2, o: 1].spread_face(1) => [1, 1, 1, 1hk, 1hk, 1o]
+            let spread_dice = kind_counts.spread_face(current_face);
+
+            // choose how many times we'll repeat this face
+            for mut nface in (0..=ndice).rev() {
+                // generate `spread_dice multichoose nface` for this iteration
+                spread_dice.multisets_cb(
+                    &mut |multiset| {
+                        let mut new_acc = acc;
+                        new_acc.extend(multiset);
+
+                        let mut new_kind_counts = kind_counts;
+                        new_kind_counts.sub_counts(DieKindCounts::from_dice_vec(multiset));
+
+                        rec(cb, new_acc, new_kind_counts, current_face + 1);
+                    },
+                    nface,
+                );
+            }
+        }
+
+        let mut out = Vec::with_capacity(self.num_multisets(6) as usize);
+        rec(&mut |dice| out.push(dice), DiceVec::new(), *self, 1);
+        out
+    }
+}
+
+const FACE_JOKER: u8 = 0;
+
+#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct Die {
+    face: u8,
+    kind: DieKind,
+}
+
+impl Die {
+    fn new(face: u8, kind: DieKind) -> Self {
+        Self { face, kind }
+    }
+
+    fn p_die(self) -> f64 {
+        self.kind.die_distr().p_face(self.face)
+    }
+}
+
+impl fmt::Debug for Die {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.face, self.kind)
+    }
+}
+
+fn str_split_at_safe(s: &str, mid: usize) -> Option<(&str, &str)> {
+    if s.is_char_boundary(mid) {
+        Some(unsafe { (s.get_unchecked(0..mid), s.get_unchecked(mid..s.len())) })
+    } else {
+        None
+    }
+}
+
+impl FromStr for Die {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        str_split_at_safe(s, 1)
+            .and_then(|(first, rest)| {
+                let face = first.parse::<u8>().ok()?;
+
+                if (1..=6).contains(&face) {
+                    let kind = DieKind::from_memnonic(rest)?;
+                    Some(Die { face, kind })
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                format!(
+                    "invalid die string '{}': expected format '<die-face><die-kind>'",
+                    s
+                )
+            })
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct DiceVec(ArrayVec<[Die; 6]>);
+
+impl DiceVec {
+    /// A new empty list of dice.
+    #[inline]
+    fn new() -> Self {
+        Self(ArrayVec::new())
+    }
+
+    // #[cfg(test)]
+    // fn from_rolls(rolls: &[u8]) -> Self {
+    //
+    // }
+
+    #[inline]
+    fn from_die(die: Die) -> Self {
+        let mut dice = Self::new();
+        dice.0.push(die);
+        dice
+    }
+
+    #[inline]
+    fn from_sorted_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = Die>,
+    {
+        let mut dice = Self::new();
+        for die in iter {
+            dice.0.push(die);
+        }
+        debug_assert!(dice.invariant());
+        dice
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[inline]
+    fn len(&self) -> u8 {
+        self.0.len() as u8
+    }
+
+    fn invariant(&self) -> bool {
+        is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
+    }
+
+    fn get_face_count(&self, face: u8) -> u8 {
+        self.0
+            .iter()
+            .map(|die| if die.face == face { 1 } else { 0 })
+            .sum()
+    }
+
+    fn get_die_count(&self, die: Die) -> u8 {
+        self.0
+            .iter()
+            .map(|&other| if other == die { 1 } else { 0 })
+            .sum()
+    }
+
+    // #[inline]
+    // fn get_die(self, idx: usize) -> Die {
+    //     self.0[idx as usize]
+    // }
+
+    fn add_die(&mut self, die: Die) {
+        let idx = self.0.partition_point(|&other| other < die);
+        self.0.insert(idx, die);
+        debug_assert!(self.invariant());
+    }
+
+    #[inline]
+    fn push_die(&mut self, die: Die) {
+        self.0.push(die);
+        debug_assert!(self.invariant());
+    }
+
+    #[inline]
+    fn push_n_die(&mut self, die: Die, n: u8) {
+        for _ in 0..n {
+            self.push_die(die);
+        }
+        debug_assert!(self.invariant());
+    }
+
+    #[inline]
+    fn extend(&mut self, other: Self) {
+        self.0.extend(other.into_iter());
+        debug_assert!(self.invariant());
+    }
+
+    fn merge(&self, other: &Self) -> Self {
+        Self::from_sorted_iter(itertools::merge(self.into_iter(), other.into_iter()))
+    }
+
+    #[inline]
+    fn truncate(&mut self, new_len: u8) {
+        self.0.truncate(new_len as usize);
+    }
+
+    fn remove_face(self, face: u8) -> Self {
+        let without_face =
+            Self::from_sorted_iter(self.0.into_iter().filter(|die| die.face != face));
+        debug_assert!(without_face.invariant());
+        without_face
+    }
+
+    fn split_next_die(mut self) -> (Self, Self) {
+        let die = self.0[0];
+        let split_idx = self.0.partition_point(|&other| other == die);
+        let other_set = self.0.split_off(split_idx);
+        (self, Self(other_set))
+    }
+
+    /// Only return unique dice.
+    fn unique_dice(&self) -> Self {
+        let (_prev, unique) = self.into_iter().fold(
+            (Die::default(), DiceVec::new()),
+            |(prev, mut unique), curr| {
+                if prev != curr {
+                    unique.0.push(curr);
+                }
+                (curr, unique)
+            },
+        );
+        debug_assert!(unique.invariant());
+        unique
+    }
+
+    fn die_kinds(&self) -> ArrayVec<[DieKind; 6]> {
+        let mut kinds = ArrayVec::new();
+        for die in self.into_iter() {
+            if !kinds.contains(&die.kind) {
+                kinds.push(die.kind);
+            }
+        }
+        kinds.sort();
+        kinds
+    }
+
+    fn die_with_kind(&self, kind: DieKind) -> DiceVec {
+        Self::from_sorted_iter(self.into_iter().filter(|die| die.kind == kind))
+    }
+
+    fn group_by_die_kind(self) -> impl Iterator<Item = (DieKind, DiceVec)> {
+        self.die_kinds()
+            .into_iter()
+            .map(move |kind| (kind, self.die_with_kind(kind)))
+    }
+
+    fn score(&self) -> u16 {
+        DiceCounts::from_dice_vec(*self).score()
+    }
+
+    fn exact_score(&self) -> u16 {
+        DiceCounts::from_dice_vec(*self).exact_score()
+    }
+
+    fn is_bust(&self) -> bool {
+        DiceCounts::from_dice_vec(*self).is_bust()
+    }
+
+    fn p_roll(&self) -> f64 {
+        let n = self.len();
+
+        let counts = DiceCounts::from_dice_vec(*self);
+        let prod = (1..=6)
+            .map(|face| factorial(counts.get_count(face) as u32))
+            .product::<u32>();
+        let n_multiset_perms = factorial(n as u32) / prod;
+
+        let p_joint = self.into_iter().map(Die::p_die).product::<f64>();
+        p_joint * (n_multiset_perms as f64)
+    }
+
+    fn multisets_cb(&self, cb: &mut impl FnMut(DiceVec), ndice: u8) {
+        fn rec(cb: &mut impl FnMut(DiceVec), mut acc: DiceVec, mut left: DiceVec, ndice: u8) {
+            // time to return the accumulator
+            if ndice == 0 {
+                cb(acc);
+                return;
+            }
+
+            // if ndice == 1 we can just return each unique element
+            if ndice == 1 {
+                for die in left.unique_dice() {
+                    let mut new_acc = acc;
+                    new_acc.push_die(die);
+                    cb(new_acc);
+                }
+                return;
+            }
+
+            let elts_left = left.len();
+
+            // special case: |S| = n means just one possible combination: S
+            if elts_left == ndice {
+                cb(acc.merge(&left));
+                return;
+            }
+
+            // will never have enough; skip
+            if elts_left < ndice {
+                return;
+            }
+
+            // take next set of identical dice
+            let (die_set, left) = left.split_next_die();
+            let die = die_set.0[0];
+            let count = die_set.len();
+
+            for to_add in (0..=min(count, ndice)).rev() {
+                let mut new_acc = acc;
+                new_acc.push_n_die(die, to_add);
+                rec(cb, new_acc, left, ndice - to_add);
+            }
+        }
+
+        rec(cb, DiceVec::new(), *self, ndice);
+    }
+
+    fn multisets(&self, ndice: u8) -> Vec<DiceVec> {
+        let mut out = Vec::new();
+        self.multisets_cb(&mut |dice| out.push(dice), ndice);
+        out
+    }
+}
+
+impl fmt::Debug for DiceVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.into_iter()).finish()
+    }
+}
+
+impl IntoIterator for DiceVec {
+    type Item = Die;
+    type IntoIter = tinyvec::ArrayVecIterator<[Die; 6]>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl FromIterator<Die> for DiceVec {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = Die>,
+    {
+        let mut dice = DiceVec::new();
+        for die in iter.into_iter() {
+            dice.add_die(die)
+        }
+        dice
+    }
+}
+
+impl FromStr for DiceVec {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut dice = DiceVec::new();
+
+        let s = s.trim_start_matches('[');
+        let s = s.trim_end_matches(']');
+
+        let splitters = &[',', ' ', '\n', '\t'];
+
+        for die_str in s.split(splitters).filter(|s| !s.is_empty()) {
+            if dice.len() >= 6 {
+                return Err("too many dice".to_string());
+            }
+
+            let die = die_str.parse::<Die>()?;
+            dice.add_die(die);
+        }
+
+        Ok(dice)
+    }
+}
 
 /// A compressed representation of a set of dice, stored as counts of each die
 /// packed into a u32. Visually,
@@ -106,16 +651,25 @@ pub fn total_cmp_f64(a: &f64, b: &f64) -> cmp::Ordering {
 /// the order of dice in a set is not important.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-struct Counts(pub u32);
+struct DiceCounts(pub u32);
 
-impl Counts {
+impl DiceCounts {
     /// A new empty set of dice rolls.
     #[inline]
     fn new() -> Self {
         Self(0)
     }
 
-    /// A convenience function for constructing a `Counts` set from an unordered
+    #[inline]
+    fn from_roll(roll: u8, count: u8) -> Self {
+        Self(((count as u32) & 0x7) << (4 * (roll as u32)))
+    }
+
+    fn from_dice_vec(dice_vec: DiceVec) -> Self {
+        dice_vec.into_iter().collect()
+    }
+
+    /// A convenience function for constructing a `DiceCounts` set from an unordered
     /// list of dice rolls.
     #[cfg(test)]
     fn from_rolls(rolls: &[u8]) -> Self {
@@ -318,31 +872,44 @@ impl Counts {
     }
 }
 
-impl fmt::Debug for Counts {
+impl fmt::Debug for DiceCounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         (self.to_rolls()).fmt(f)
     }
 }
 
-impl cmp::Ord for Counts {
+impl cmp::Ord for DiceCounts {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.to_rolls().cmp(&other.to_rolls())
     }
 }
 
-impl cmp::PartialOrd for Counts {
+impl cmp::PartialOrd for DiceCounts {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-/// Parse a comma/space/tab separated list of dice into a `Counts` set.
+impl FromIterator<Die> for DiceCounts {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = Die>,
+    {
+        let mut counts = DiceCounts::new();
+        for die in iter.into_iter() {
+            counts.add_count(die.face, 1);
+        }
+        counts
+    }
+}
+
+/// Parse a comma/space/tab separated list of dice into a `DiceCounts` set.
 /// Enclosing brackets ('[' or ']') optional.
-impl FromStr for Counts {
+impl FromStr for DiceCounts {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut counts = Counts::new();
+        let mut counts = DiceCounts::new();
 
         let s = s.trim_start_matches('[');
         let s = s.trim_end_matches(']');
@@ -367,7 +934,7 @@ impl FromStr for Counts {
 /// An `Iterator` over combinations (with replacement) of _all_ dice roll outcomes.
 struct AllDiceMultisetsIter {
     /// the _next_ combination we'll output (unless we're done).
-    counts: Counts,
+    counts: DiceCounts,
     /// total number of dice rolls per combination.
     total_dice: u8,
     /// set to `true` when we're done generating.
@@ -377,7 +944,7 @@ struct AllDiceMultisetsIter {
 impl AllDiceMultisetsIter {
     fn new(total_dice: u8) -> Self {
         // initialize with our the very first combination: [1, 1, .., 1]
-        let mut counts = Counts::new();
+        let mut counts = DiceCounts::new();
         counts.set_count(1, total_dice);
 
         Self {
@@ -389,7 +956,7 @@ impl AllDiceMultisetsIter {
 }
 
 impl Iterator for AllDiceMultisetsIter {
-    type Item = Counts;
+    type Item = DiceCounts;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -422,8 +989,8 @@ impl Iterator for AllDiceMultisetsIter {
 }
 
 /// Return all possible sub-multisets of size `ndice` of a given set of dice rolls.
-fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
-    fn rec(cb: &mut impl FnMut(Counts), mut acc: Counts, mut left: Counts, ndice: u8) {
+fn dice_multisets(set: DiceCounts, ndice: u8) -> Vec<DiceCounts> {
+    fn rec(cb: &mut impl FnMut(DiceCounts), mut acc: DiceCounts, mut left: DiceCounts, ndice: u8) {
         // time to return the accumulator
         if ndice == 0 {
             cb(acc);
@@ -470,7 +1037,12 @@ fn dice_multisets(set: Counts, ndice: u8) -> Vec<Counts> {
     }
 
     let mut out = Vec::new();
-    rec(&mut |counts| out.push(counts), Counts::new(), set, ndice);
+    rec(
+        &mut |counts| out.push(counts),
+        DiceCounts::new(),
+        set,
+        ndice,
+    );
     out
 }
 
@@ -490,7 +1062,7 @@ enum Action {
     /// If there is at least one scoring die and at least 2 dice left, the player
     /// can choose to hold some non-empty subset of scoring dice and re-roll the
     /// rest. The held dice score is added to their current round total.
-    Roll(Counts),
+    Roll(DiceCounts),
 }
 
 ////////////////////////
@@ -735,7 +1307,7 @@ impl NormalizedStateAction {
     }
 
     #[inline]
-    fn from_state_roll_action(state: State, held_dice: Counts) -> Self {
+    fn from_state_roll_action(state: State, held_dice: DiceCounts) -> Self {
         // we have this many dice left to roll
         let ndice_left = state.rolled_dice.len() - held_dice.len();
 
@@ -752,7 +1324,7 @@ impl NormalizedStateAction {
     }
 
     #[inline]
-    fn into_state(self, rolled_dice: Counts) -> State {
+    fn into_state(self, rolled_dice: DiceCounts) -> State {
         State {
             my_round_total: self.my_round_total,
             target_score: self.target_score,
@@ -873,7 +1445,7 @@ impl NormalizedStateAction {
 #[derive(Copy, Clone, Debug)]
 struct State {
     /// The set of dice the player just rolled.
-    pub rolled_dice: Counts,
+    pub rolled_dice: DiceCounts,
     /// The player's current round score (accumulated from previous rolls in the turn).
     pub my_round_total: u16,
     /// The total score we're trying to hit. If we meet or exceed this value,
@@ -882,7 +1454,7 @@ struct State {
 }
 
 impl State {
-    fn new(my_round_total: u16, target_score: u16, rolled_dice: Counts) -> Self {
+    fn new(my_round_total: u16, target_score: u16, rolled_dice: DiceCounts) -> Self {
         Self {
             rolled_dice,
             my_round_total,
@@ -1192,7 +1764,7 @@ trait Command: Sized {
 struct BestActionCommand {
     round_total: u16,
     target_score: u16,
-    rolled_dice: Counts,
+    rolled_dice: DiceCounts,
 }
 
 impl Command for BestActionCommand {
@@ -1535,7 +2107,17 @@ fn main() {
 mod test {
     use super::*;
     use approx::assert_relative_eq;
+    use claim::{assert_gt, assert_lt};
     use std::collections::HashSet;
+
+    macro_rules! dice {
+        () => {
+            DiceVec::new()
+        };
+        ($($x:tt),+ $(,)?) => {
+            DiceVec::from_iter([ $( Die::from_str(stringify!($x)).unwrap() ),+ ].into_iter())
+        };
+    }
 
     fn factorial_ref(n: u32) -> u32 {
         (1..=n).product()
@@ -1549,8 +2131,8 @@ mod test {
     }
 
     // simple recursive implementation
-    fn all_dice_multisets_ref(ndice: u8) -> Vec<Counts> {
-        fn rec(cb: &mut impl FnMut(Counts), counts: Counts, current_dice: u8, ndice: u8) {
+    fn all_dice_multisets_ref(ndice: u8) -> Vec<DiceCounts> {
+        fn rec(cb: &mut impl FnMut(DiceCounts), counts: DiceCounts, current_dice: u8, ndice: u8) {
             // time to return the accumulator
             if ndice == 0 {
                 cb(counts);
@@ -1569,41 +2151,41 @@ mod test {
         }
 
         let mut out = Vec::new();
-        rec(&mut |counts| out.push(counts), Counts::new(), 1, ndice);
+        rec(&mut |counts| out.push(counts), DiceCounts::new(), 1, ndice);
         out.sort_unstable();
         out
     }
 
     #[test]
     fn test_counts_score() {
-        assert_eq!(0, Counts::from_rolls(&[]).score());
-        assert_eq!(100, Counts::from_rolls(&[1]).score());
-        assert_eq!(150, Counts::from_rolls(&[5, 1]).score());
-        assert_eq!(0, Counts::from_rolls(&[2, 2, 3]).score());
-        assert_eq!(1500, Counts::from_rolls(&[6, 5, 4, 3, 2, 1]).score());
-        assert_eq!(250, Counts::from_rolls(&[1, 1, 5, 3, 2, 2]).score());
-        assert_eq!(1050, Counts::from_rolls(&[1, 1, 5, 3, 1, 2]).score());
-        assert_eq!(400, Counts::from_rolls(&[4, 4, 4]).score());
-        assert_eq!(800, Counts::from_rolls(&[4, 4, 4, 4]).score());
-        assert_eq!(1600, Counts::from_rolls(&[4, 4, 4, 4, 4]).score());
-        assert_eq!(3200, Counts::from_rolls(&[4, 4, 4, 4, 4, 4]).score());
+        assert_eq!(0, DiceCounts::from_rolls(&[]).score());
+        assert_eq!(100, DiceCounts::from_rolls(&[1]).score());
+        assert_eq!(150, DiceCounts::from_rolls(&[5, 1]).score());
+        assert_eq!(0, DiceCounts::from_rolls(&[2, 2, 3]).score());
+        assert_eq!(1500, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).score());
+        assert_eq!(250, DiceCounts::from_rolls(&[1, 1, 5, 3, 2, 2]).score());
+        assert_eq!(1050, DiceCounts::from_rolls(&[1, 1, 5, 3, 1, 2]).score());
+        assert_eq!(400, DiceCounts::from_rolls(&[4, 4, 4]).score());
+        assert_eq!(800, DiceCounts::from_rolls(&[4, 4, 4, 4]).score());
+        assert_eq!(1600, DiceCounts::from_rolls(&[4, 4, 4, 4, 4]).score());
+        assert_eq!(3200, DiceCounts::from_rolls(&[4, 4, 4, 4, 4, 4]).score());
     }
 
     #[test]
     fn test_counts_from_rolls() {
-        assert!(Counts::from_rolls(&[]).is_empty());
+        assert!(DiceCounts::from_rolls(&[]).is_empty());
 
-        assert_eq!(0, Counts::from_rolls(&[]).len());
-        assert_eq!(1, Counts::from_rolls(&[1]).len());
-        assert_eq!(2, Counts::from_rolls(&[4, 2]).len());
-        assert_eq!(6, Counts::from_rolls(&[6, 5, 4, 3, 2, 1]).len());
+        assert_eq!(0, DiceCounts::from_rolls(&[]).len());
+        assert_eq!(1, DiceCounts::from_rolls(&[1]).len());
+        assert_eq!(2, DiceCounts::from_rolls(&[4, 2]).len());
+        assert_eq!(6, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).len());
 
-        assert_eq!(1, Counts::from_rolls(&[6, 5, 4, 3, 2, 1]).get_count(6));
-        assert_eq!(3, Counts::from_rolls(&[6, 5, 3, 3, 3]).get_count(3));
-        assert_eq!(0, Counts::from_rolls(&[6, 5, 3, 3, 3]).get_count(1));
-        assert_eq!(6, Counts::from_rolls(&[3, 3, 3, 3, 3, 3]).get_count(3));
-        assert_eq!(6, Counts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(6));
-        assert_eq!(0, Counts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(3));
+        assert_eq!(1, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).get_count(6));
+        assert_eq!(3, DiceCounts::from_rolls(&[6, 5, 3, 3, 3]).get_count(3));
+        assert_eq!(0, DiceCounts::from_rolls(&[6, 5, 3, 3, 3]).get_count(1));
+        assert_eq!(6, DiceCounts::from_rolls(&[3, 3, 3, 3, 3, 3]).get_count(3));
+        assert_eq!(6, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(6));
+        assert_eq!(0, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(3));
     }
 
     #[test]
@@ -1613,10 +2195,10 @@ mod test {
             combs.sort_unstable();
 
             // outputs expected number of elements
-            assert_eq!(num_multisets(6, k) as usize, combs.len(),);
+            assert_eq!(num_multisets(6, k) as usize, combs.len());
 
             // no duplicates
-            let combs_set = HashSet::<Counts>::from_iter(combs.clone().into_iter());
+            let combs_set = HashSet::<DiceCounts>::from_iter(combs.clone().into_iter());
             assert_eq!(num_multisets(6, k) as usize, combs_set.len());
 
             // matches recursive implementation
@@ -1626,33 +2208,186 @@ mod test {
     }
 
     #[test]
+    fn test_all_dice_vec_multisets() {
+        let mut dice = dice![1, 1, 1, 1, 1, 1];
+
+        // if we only have one die kind, the multisets should match
+        for ndice in (1..=6).rev() {
+            dice.truncate(ndice);
+
+            let mut ref_combs = AllDiceMultisetsIter::new(ndice).collect::<Vec<_>>();
+            ref_combs.sort_unstable();
+
+            assert_eq!(
+                DieKindCounts::from_dice_vec(dice)
+                    .all_multisets()
+                    .into_iter()
+                    .map(DiceCounts::from_dice_vec)
+                    .collect::<Vec<_>>(),
+                ref_combs,
+            );
+        }
+
+        let kind_counts = DieKindCounts::from_dice_vec(dice![1, 1, 1, 1hk, 1hk, 1o]);
+        let mut combs = kind_counts.all_multisets();
+
+        // outputs expected number of elements
+        assert_eq!(kind_counts.num_multisets(6) as usize, combs.len());
+
+        // no duplicates
+        let combs_set = HashSet::<DiceVec>::from_iter(combs.clone().into_iter());
+        assert_eq!(kind_counts.num_multisets(6) as usize, combs_set.len());
+    }
+
+    #[test]
     fn test_dice_multisets() {
         // [1 1], [1 3], [1 5], [3 5]
         let expected = vec![
-            Counts::from_rolls(&[1, 1]),
-            Counts::from_rolls(&[1, 3]),
-            Counts::from_rolls(&[1, 5]),
-            Counts::from_rolls(&[3, 5]),
+            DiceCounts::from_rolls(&[1, 1]),
+            DiceCounts::from_rolls(&[1, 3]),
+            DiceCounts::from_rolls(&[1, 5]),
+            DiceCounts::from_rolls(&[3, 5]),
         ];
         assert_eq!(
             &expected,
-            &dice_multisets(Counts::from_rolls(&[1, 1, 3, 5]), 2)
+            &dice_multisets(DiceCounts::from_rolls(&[1, 1, 3, 5]), 2)
         );
 
         // when all the elements are unique, this is just the normal set
         // combinations
-        for k in 0..=5 {
+        for k in 0..=6 {
             assert_eq!(
-                num_combinations(5, k) as usize,
-                dice_multisets(Counts::from_rolls(&[1, 2, 3, 4, 5]), k as u8).len(),
+                num_combinations(6, k) as usize,
+                dice_multisets(DiceCounts::from_rolls(&[1, 2, 3, 4, 5, 6]), k as u8).len(),
             );
         }
     }
 
     #[test]
+    fn test_dice_vec_from_str() {
+        assert_eq!(dice![], DiceVec::from_str("").unwrap());
+        assert_eq!(dice![], DiceVec::from_str("[]").unwrap());
+        assert_eq!(
+            dice![1, 2hk, 3o],
+            DiceVec::from_str("[1, 2hk, 3o]").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_dice_vec_unique_dice() {
+        assert_eq!(dice![], dice![].unique_dice());
+        assert_eq!(dice![1, 2hk, 3o], dice![1, 2hk, 3o].unique_dice());
+        assert_eq!(
+            dice![1, 2hk, 3o],
+            dice![1, 1, 1, 2hk, 2hk, 3o].unique_dice()
+        );
+        assert_eq!(
+            dice![1, 1hk, 1o],
+            dice![1, 1, 1, 1hk, 1hk, 1o].unique_dice()
+        );
+    }
+
+    #[test]
+    fn test_dice_vec_merge() {
+        assert_eq!(dice![], dice![].merge(&dice![]));
+        assert_eq!(dice![1], dice![1].merge(&dice![]));
+        assert_eq!(dice![1], dice![].merge(&dice![1]));
+        assert_eq!(dice![1, 2hk, 3o], dice![2hk].merge(&dice![1, 3o]));
+        assert_eq!(
+            dice![1, 1, 2hk, 2hk, 3o, 3o],
+            dice![2hk, 3o].merge(&dice![1, 1, 2hk, 3o])
+        );
+        assert_eq!(
+            dice![1, 1, 1hk, 1hk, 1o, 1o],
+            dice![1hk, 1o].merge(&dice![1, 1, 1hk, 1o])
+        );
+    }
+
+    #[test]
+    fn test_dice_vec_multisets() {
+        assert_eq!(vec![dice![]], dice![1, 1, 1, 2hk, 2hk, 3o].multisets(0));
+        assert_eq!(
+            vec![dice![1], dice![2hk], dice![3o]],
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(1)
+        );
+        assert_eq!(
+            vec![dice![1], dice![1hk], dice![1o]],
+            dice![1, 1, 1, 1hk, 1hk, 1o].multisets(1)
+        );
+        assert_eq!(
+            vec![
+                dice![1, 1],
+                dice![1, 2hk],
+                dice![1, 3o],
+                dice![2hk, 2hk],
+                dice![2hk, 3o]
+            ],
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(2)
+        );
+        assert_eq!(
+            vec![
+                dice![1, 1, 1],
+                dice![1, 1, 2hk],
+                dice![1, 1, 3o],
+                dice![1, 2hk, 2hk],
+                dice![1, 2hk, 3o],
+                dice![2hk, 2hk, 3o],
+            ],
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(3)
+        );
+        assert_eq!(
+            vec![dice![1, 1, 1, 2hk, 2hk, 3o]],
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(6)
+        );
+
+        // when all the elements are unique, this is just the normal set
+        // combinations
+        for k in 0..=6 {
+            assert_eq!(
+                num_combinations(6, k as u32) as usize,
+                dice![1, 1hk, 1o, 2, 2hk, 2o].multisets(k).len(),
+            );
+        }
+    }
+
+    #[test]
+    fn test_dice_vec_p_roll() {
+        // rolling just standard dice should give approx. the same result as
+        // DiceCounts::p_roll
+        assert_relative_eq!(
+            dice![1, 1, 1, 2, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 1, 2, 2, 3]).p_roll(),
+        );
+        assert_relative_eq!(
+            dice![1, 1, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
+        );
+
+        // rolling a 2 with the Odd Die has a lower probability than uniform
+        assert_lt!(
+            dice![1, 1, 2, 2, 2o, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 2, 2, 3]).p_roll(),
+        );
+        assert_lt!(
+            dice![1, 1, 2o, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
+        );
+
+        // rolling a 1 with the Odd Die has a greater probability than uniform
+        assert_gt!(
+            dice![1, 1o, 2, 2, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 2, 2, 3]).p_roll(),
+        );
+        assert_gt!(
+            dice![1, 1o, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
+        );
+    }
+
+    #[test]
     fn test_gen_actions() {
         fn actions(rolls: &[u8]) -> Vec<Action> {
-            let state = State::new(0, DEFAULT_TARGET_SCORE, Counts::from_rolls(rolls));
+            let state = State::new(0, DEFAULT_TARGET_SCORE, DiceCounts::from_rolls(rolls));
             let mut actions = state.actions();
             actions.sort_unstable();
             actions
@@ -1660,10 +2395,10 @@ mod test {
 
         macro_rules! roll {
             () => (
-                Action::Roll(Counts::new())
+                Action::Roll(DiceCounts::new())
             );
             ($($x:expr),+ $(,)?) => (
-                Action::Roll(Counts::from_rolls(&[ $($x),+ ]))
+                Action::Roll(DiceCounts::from_rolls(&[ $($x),+ ]))
             );
         }
 
@@ -1721,7 +2456,7 @@ mod test {
     fn test_counts_probability() {
         assert_relative_eq!(
             3.0 / ((6.0_f64).powf(3.0)),
-            Counts::from_rolls(&[1, 1, 3]).p_roll()
+            DiceCounts::from_rolls(&[1, 1, 3]).p_roll()
         );
 
         for n in 1..=6 {
@@ -1744,7 +2479,7 @@ mod test {
     // #[test]
     // #[ignore]
     // fn test_actions_by_expected_value() {
-    //     let state = State::new(0, Counts::from_rolls(&[5, 5, 3, 3, 4]));
+    //     let state = State::new(0, DiceCounts::from_rolls(&[5, 5, 3, 3, 4]));
     //
     //     for tuple in state.actions_by_expected_value().1 {
     //         println!("{:?}", tuple);
