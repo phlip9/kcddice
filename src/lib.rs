@@ -22,6 +22,7 @@
 pub mod cli;
 mod dice;
 mod search;
+mod search2;
 
 use std::cmp;
 
@@ -101,6 +102,29 @@ where
 
     for next in iter {
         if let Some(cmp::Ordering::Greater) | None = compare(&prev, &next) {
+            return false;
+        }
+        prev = next;
+    }
+
+    true
+}
+
+/// Returns `true` if the iterator `iter` is totally ordered, according to the
+/// comparator function `compare`, i.e., `x_1 < x2 < ... < x_n`.
+pub(crate) fn is_total_order_by<T, F>(mut iter: impl Iterator<Item = T>, mut compare: F) -> bool
+where
+    F: FnMut(&T, &T) -> Option<cmp::Ordering>,
+{
+    let mut prev = match iter.next() {
+        Some(first) => first,
+        None => return true,
+    };
+
+    for next in iter {
+        if let Some(cmp::Ordering::Greater) | Some(cmp::Ordering::Equal) | None =
+            compare(&prev, &next)
+        {
             return false;
         }
         prev = next;

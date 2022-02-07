@@ -1,5 +1,8 @@
-use crate::{dice::DiceCounts, total_cmp_f64};
-use ndarray::{s, Array1, Array2, ArrayView1};
+use crate::{
+    dice::{DiceVec, DieKindCounts},
+    search::ScorePMF,
+    total_cmp_f64,
+};
 use std::{cell::Cell, cmp, collections::HashMap};
 
 ////////////
@@ -18,7 +21,7 @@ pub enum Action {
     /// If there is at least one scoring die and at least 2 dice left, the player
     /// can choose to hold some non-empty subset of scoring dice and re-roll the
     /// rest. The held dice score is added to their current round total.
-    Roll(DiceCounts),
+    Roll(DiceVec),
 }
 
 ////////////////////////
@@ -30,6 +33,8 @@ pub enum Action {
 /// even without the `Context`; rather, the `Context` should be used only for
 /// optimizations or evaluation statistics.
 pub struct Context {
+    /// All of our dice
+    all_dice: DieKindCounts,
     /// A cache from normalized (State, Action) pairs to their expected value
     /// after evaluation.
     action_value_cache: HashMap<NormalizedStateAction, f64>,
@@ -56,6 +61,7 @@ pub struct Context {
 impl Context {
     pub fn new() -> Self {
         Context {
+            all_dice: DieKindCounts::all_standard(6),
             game_finished_prunes: Cell::new(0),
             depth: 0,
             depth_max: 30,
@@ -68,6 +74,10 @@ impl Context {
             depth_prunes: Cell::new(0),
             joint_prob_prunes: Cell::new(0),
         }
+    }
+
+    fn set_all_dice(&mut self, all_dice: DieKindCounts) {
+        self.all_dice = all_dice;
     }
 
     #[inline]
@@ -228,59 +238,54 @@ pub struct NormalizedStateAction {
     /// The total score we're trying to hit. If we meet or exceed this value,
     /// then we win.
     pub target_score: u16,
-    /// The number of dice left to reroll after applying the action.
-    pub ndice_left: u8,
+    /// The set of dice available to reroll after applying the action.
+    pub dice_left: DieKindCounts,
 }
 
 impl NormalizedStateAction {
-    pub fn new(my_round_total: u16, target_score: u16, ndice_left: u8) -> Self {
+    pub fn new(my_round_total: u16, target_score: u16, dice_left: DieKindCounts) -> Self {
         Self {
             my_round_total,
             target_score,
-            ndice_left,
+            dice_left,
         }
     }
 
     /// An pseudo initial state, before rolling the first set of dice.
-    fn init_state(target_score: u16) -> Self {
+    fn init_state(target_score: u16, dice_kinds: DieKindCounts) -> Self {
         Self {
             my_round_total: 0,
             target_score,
-            ndice_left: 6,
+            dice_left: dice_kinds,
         }
     }
 
     #[allow(unused)]
-    fn from_state_action(state: State, action: Action) -> Self {
+    fn from_state_action(all_dice: DieKindCounts, state: State, action: Action) -> Self {
         match action {
             Action::Pass => Self {
                 my_round_total: state.my_round_total + state.rolled_dice.score(),
                 target_score: state.target_score,
-                ndice_left: 0,
+                dice_left: DieKindCounts::new(),
             },
-            Action::Roll(held_dice) => Self::from_state_roll_action(state, held_dice),
+            Action::Roll(held_dice) => Self::from_state_roll_action(all_dice, state, held_dice),
         }
     }
 
     #[inline]
-    fn from_state_roll_action(state: State, held_dice: DiceCounts) -> Self {
-        // we have this many dice left to roll
-        let ndice_left = state.rolled_dice.len() - held_dice.len();
-
-        // apparently you can actually roll again with a fresh hand if
-        // you hold all the dice left and they're all scoring dice.
-        let ndice_left = if ndice_left == 0 { 6 } else { ndice_left };
+    fn from_state_roll_action(all_dice: DieKindCounts, state: State, held_dice: DiceVec) -> Self {
+        let dice_left = state.dice_left_after_hold(all_dice, held_dice);
 
         Self {
             // fold the held dice score into the round total
             my_round_total: state.my_round_total + held_dice.exact_score(),
             target_score: state.target_score,
-            ndice_left,
+            dice_left,
         }
     }
 
     #[inline]
-    fn into_state(self, rolled_dice: DiceCounts) -> State {
+    fn into_state(self, rolled_dice: DiceVec) -> State {
         State {
             my_round_total: self.my_round_total,
             target_score: self.target_score,
@@ -290,7 +295,7 @@ impl NormalizedStateAction {
 
     #[inline]
     fn is_pass(self) -> bool {
-        self.ndice_left == 0
+        self.dice_left.ndice() == 0
     }
 
     /// Return an `Iterator` over all possible states reachable after rolling the
@@ -298,7 +303,9 @@ impl NormalizedStateAction {
     /// state.
     #[inline]
     fn possible_roll_states(self) -> impl Iterator<Item = (State, f64)> {
-        DiceCounts::all_multisets(self.ndice_left)
+        self.dice_left
+            .all_multisets()
+            .into_iter()
             .map(move |next_roll| (self.into_state(next_roll), next_roll.p_roll()))
     }
 
@@ -336,7 +343,8 @@ impl NormalizedStateAction {
                     .actions()
                     .into_iter()
                     .map(|next_action| {
-                        Self::from_state_action(next_state, next_action).expected_value(ctxt)
+                        Self::from_state_action(ctxt.all_dice, next_state, next_action)
+                            .expected_value(ctxt)
                     })
                     .max_by(total_cmp_f64)
                     .unwrap_or(0.0)
@@ -373,7 +381,7 @@ impl NormalizedStateAction {
                     .actions()
                     .into_iter()
                     .map(|next_action| {
-                        let distr = Self::from_state_action(next_state, next_action)
+                        let distr = Self::from_state_action(ctxt.all_dice, next_state, next_action)
                             .score_distribution(ctxt);
                         (distr.expected_value(), distr)
                     })
@@ -389,10 +397,6 @@ impl NormalizedStateAction {
     }
 }
 
-// TODO(philiphayes): probably fold the target score back into the state, so
-// caches can be used across turns? wouldn't that add like n^2 # cache entries?
-// what is wrong with adding points_needed_to_win vs round_total?
-
 /////////////////
 // Round State //
 /////////////////
@@ -401,7 +405,7 @@ impl NormalizedStateAction {
 #[derive(Copy, Clone, Debug)]
 pub struct State {
     /// The set of dice the player just rolled.
-    pub rolled_dice: DiceCounts,
+    pub rolled_dice: DiceVec,
     /// The player's current round score (accumulated from previous rolls in the turn).
     pub my_round_total: u16,
     /// The total score we're trying to hit. If we meet or exceed this value,
@@ -410,7 +414,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(my_round_total: u16, target_score: u16, rolled_dice: DiceCounts) -> Self {
+    pub fn new(my_round_total: u16, target_score: u16, rolled_dice: DiceVec) -> Self {
         Self {
             rolled_dice,
             my_round_total,
@@ -431,44 +435,48 @@ impl State {
         // we _can_ in fact hold all the dice, but they must all be scoring dice.
         let max_num_holds = self.rolled_dice.len();
 
-        // insight: it's (almost always) not rational to choose an action with a
-        // lower score but the same number of dice.
-        //
-        // for example, suppose we have [1,5] on the table. we then have 4 possible
-        // actions: [pass, roll[1], roll[5], roll[1,5]].
-        //
-        // consider roll[1] vs roll[5]
-        //
-        // choosing roll[1] means scoring 100 pts then rolling 1 die while
-        // roll[5] scores 50 pts and also rolls 1 die. (hypothesis) there's no
-        // reason to lose out on 50 pts by only holding 5.
+        // TODO(philiphayes): this is probably no longer true with multiple
+        // different die kinds.
 
-        // TODO(philiphayes): is this still necessary?
-        let mut best_score_by_ndice = [0u16; 8];
+        // // insight: it's (almost always) not rational to choose an action with a
+        // // lower score but the same number of dice.
+        // //
+        // // for example, suppose we have [1,5] on the table. we then have 4 possible
+        // // actions: [pass, roll[1], roll[5], roll[1,5]].
+        // //
+        // // consider roll[1] vs roll[5]
+        // //
+        // // choosing roll[1] means scoring 100 pts then rolling 1 die while
+        // // roll[5] scores 50 pts and also rolls 1 die. (hypothesis) there's no
+        // // reason to lose out on 50 pts by only holding 5.
+        //
+        // // TODO(philiphayes): is this still necessary?
+        // let mut best_score_by_ndice = [0u16; 8];
+        //
+        // // the set of all possible dice we can hold from the board.
+        // // we must hold at least one die.
+        // let possible_holds = (1..=max_num_holds)
+        //     .flat_map(|ndice| self.rolled_dice.multisets(ndice))
+        //     // only accept holds of scoring dice and the max score hold per hold size
+        //     .filter_map(|held_dice| {
+        //         let len = held_dice.len() as usize;
+        //         let score = held_dice.exact_score();
+        //         // this also handles rejecting zero score rolls (since strictly >)
+        //         if score > best_score_by_ndice[len] {
+        //             best_score_by_ndice[len] = score;
+        //             Some(Action::Roll(held_dice))
+        //         } else {
+        //             None
+        //         }
+        //     })
+        //     .collect::<Vec<_>>();
 
-        // the set of all possible dice we can hold from the board.
-        // we must hold at least one die.
+        // for now just do the dumb thing and try all possible non-bust holds
         let possible_holds = (1..=max_num_holds)
             .flat_map(|ndice| self.rolled_dice.multisets(ndice))
-            // only accept holds of scoring dice and the max score hold per hold size
-            .filter_map(|held_dice| {
-                let len = held_dice.len() as usize;
-                let score = held_dice.exact_score();
-                // this also handles rejecting zero score rolls (since strictly >)
-                if score > best_score_by_ndice[len] {
-                    best_score_by_ndice[len] = score;
-                    Some(Action::Roll(held_dice))
-                } else {
-                    None
-                }
-            })
+            .filter(|held_dice| held_dice.exact_score() > 0)
+            .map(Action::Roll)
             .collect::<Vec<_>>();
-
-        // let possible_holds = (1..=max_num_holds)
-        //     .flat_map(|ndice| dice_multisets(self.rolled_dice, ndice))
-        //     .filter(|held_dice| held_dice.exact_score() > 0)
-        //     .map(Action::Roll)
-        //     .collect::<Vec<_>>();
 
         let mut actions_vec = possible_holds;
 
@@ -482,23 +490,35 @@ impl State {
     /// assuming we always choose subsequent actions by maximum expected value.
     #[inline]
     fn action_expected_value(&self, ctxt: &mut Context, action: Action) -> f64 {
-        NormalizedStateAction::from_state_action(*self, action).expected_value(ctxt)
+        NormalizedStateAction::from_state_action(ctxt.all_dice, *self, action).expected_value(ctxt)
+    }
+
+    fn dice_left_after_hold(&self, all_dice: DieKindCounts, held_dice: DiceVec) -> DieKindCounts {
+        let ndice_left = self.rolled_dice.len() - held_dice.len();
+
+        if ndice_left == 0 {
+            all_dice
+        } else {
+            let held_kinds = held_dice.into_die_kind_counts();
+            let mut rolled_kinds = self.rolled_dice.into_die_kind_counts();
+
+            rolled_kinds.sub_counts(held_kinds);
+            rolled_kinds
+        }
     }
 
     /// Evaluate the probability of "busting" immediately after applying the
     /// given `Action` to the current turn `State`.
     ///
     /// Fun fact: 3% chance to bust on your first roll : )
-    fn action_p_bust(&self, action: Action) -> f64 {
+    fn action_p_bust(&self, ctxt: &Context, action: Action) -> f64 {
         match action {
             Action::Pass => 0.0,
             Action::Roll(held_dice) => {
-                // we have this many dice left to roll
-                let ndice_left = self.rolled_dice.len() - held_dice.len();
-                let ndice_left = if ndice_left == 0 { 6 } else { ndice_left };
+                let available_kinds = self.dice_left_after_hold(ctxt.all_dice, held_dice);
 
                 let mut p_bust = 0.0_f64;
-                for next_roll in DiceCounts::all_multisets(ndice_left) {
+                for next_roll in available_kinds.all_multisets() {
                     let p_roll = next_roll.p_roll();
 
                     if next_roll.is_bust() {
@@ -520,7 +540,7 @@ impl State {
                 (
                     action,
                     self.action_expected_value(ctxt, action),
-                    self.action_p_bust(action),
+                    self.action_p_bust(ctxt, action),
                 )
             })
             .collect::<Vec<_>>();
@@ -529,263 +549,4 @@ impl State {
         actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
         actions_values
     }
-}
-
-///////////////
-// Score PMF //
-///////////////
-
-#[derive(Clone, Debug)]
-pub struct ScorePMF(HashMap<u16, f64>);
-
-impl ScorePMF {
-    #[inline]
-    pub fn new() -> Self {
-        Self(HashMap::new())
-    }
-
-    #[inline]
-    pub fn constant(score: u16) -> Self {
-        let mut pmf = HashMap::new();
-        pmf.insert(score, 1.0);
-        Self(pmf)
-    }
-
-    #[inline]
-    pub fn bust() -> Self {
-        Self::constant(0)
-    }
-
-    pub fn into_vec(self) -> Vec<(u16, f64)> {
-        self.0.into_iter().collect()
-    }
-
-    fn into_dense(&self, target_score: u16) -> Array1<f64> {
-        let num_states = MarkovMatrix::num_states(target_score);
-
-        let mut dense_pmf = Array1::zeros(num_states);
-
-        for state_idx in 0..num_states {
-            dense_pmf[state_idx] = self
-                .0
-                .get(&MarkovMatrix::i2s(state_idx))
-                .copied()
-                .unwrap_or(0.0);
-        }
-
-        dense_pmf
-    }
-
-    pub fn expected_value(&self) -> f64 {
-        self.0
-            .iter()
-            .map(|(&score, &p_score)| p_score * (score as f64))
-            .sum()
-    }
-
-    pub fn add_conditional_distr(&mut self, p_cond: f64, cond_distr: &Self) {
-        use std::ops::AddAssign;
-        for (&score, &p_score) in &cond_distr.0 {
-            self.0
-                .entry(score)
-                .or_insert(0.0)
-                .add_assign(p_cond * p_score);
-        }
-    }
-
-    pub fn total_mass(&self) -> f64 {
-        self.0.values().sum()
-    }
-}
-
-#[derive(Debug)]
-pub struct MarkovMatrix(Array2<f64>);
-
-impl MarkovMatrix {
-    /// score to state index
-    #[inline]
-    const fn s2i(score: u16) -> usize {
-        (score / 50) as usize
-    }
-
-    /// state index to score
-    #[inline]
-    const fn i2s(state_idx: usize) -> u16 {
-        (state_idx * 50) as u16
-    }
-
-    #[inline]
-    const fn num_states(target_score: u16) -> usize {
-        Self::s2i(target_score) + 1
-    }
-
-    pub fn from_optimal_policy(target_score: u16) -> Self {
-        let num_states = Self::num_states(target_score);
-
-        let mut matrix = Array2::zeros((num_states, num_states));
-
-        // compute the score distribution for each possible intermediate accumulated
-        // turn score, then assemble into a matrix where each column x_i is the
-        // score distribution pmf starting with turn score i*50.
-        for turn_score_idx in Self::s2i(0)..Self::s2i(target_score) {
-            let turn_score = Self::i2s(turn_score_idx);
-
-            let mut ctxt = Context::new();
-            let qstate = NormalizedStateAction::new(0, target_score - turn_score, 6);
-
-            let score_pmf = qstate
-                .score_distribution(&mut ctxt)
-                .into_dense(target_score);
-
-            matrix
-                .slice_mut(s![turn_score_idx.., turn_score_idx])
-                .assign(&score_pmf.slice(s![..num_states - turn_score_idx]));
-        }
-
-        // remember to set the absorber column [0 0 .. 1] last (if we've won the
-        // game, we stay in the win state forever).
-        matrix[[num_states - 1, num_states - 1]] = 1.0;
-
-        Self(matrix)
-    }
-
-    pub fn turns_to_win_cdf(&self, max_num_turns: usize) -> Array1<f64> {
-        let n = self.0.nrows();
-        let mut accum = Array2::<f64>::eye(n);
-
-        let mut turns_cdf = Array1::<f64>::zeros(max_num_turns);
-
-        for turn in 0..max_num_turns {
-            // A^i+1 = A^i * A
-            accum = accum.dot(&self.0);
-            // P[win on turn i] = (A^i · [1 0 .. 0]^T)_{n-1} = (A^i)_{n-1,0}
-            turns_cdf[turn] = accum[[n - 1, 0]];
-        }
-
-        turns_cdf
-    }
-}
-
-/// Given `X_1` and `X_2` random variables defined by the same CDF `cdf`, returns
-/// the `Pr[X_1 <= X_2]`.
-pub fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
-    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
-    let p = 0.0;
-
-    // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
-    let c_i1 = 0.0;
-
-    let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
-        // c_i = cdf[i]
-
-        // p_1 = Pr[X_1 = x_i]
-        //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
-        //     = cdf[i] - cdf[i - 1]
-        let p_1 = c_i - c_i1;
-
-        // p_2 = Pr[X_2 >= x_i]
-        //     = 1 - Pr[X_2 < x_i]
-        //     = 1 - Pr[X_2 <= prev(x_i)]
-        //     = 1 - cdf[i - 1]
-        let p_2 = 1.0 - c_i1;
-
-        (p + (p_1 * p_2), c_i)
-    });
-
-    p
-}
-
-///////////
-// Tests //
-///////////
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::DEFAULT_TARGET_SCORE;
-    use approx::assert_relative_eq;
-
-    #[test]
-    fn test_gen_actions() {
-        fn actions(rolls: &[u8]) -> Vec<Action> {
-            let state = State::new(0, DEFAULT_TARGET_SCORE, DiceCounts::from_rolls(rolls));
-            let mut actions = state.actions();
-            actions.sort_unstable();
-            actions
-        }
-
-        macro_rules! roll {
-            () => (
-                Action::Roll(DiceCounts::new())
-            );
-            ($($x:expr),+ $(,)?) => (
-                Action::Roll(DiceCounts::from_rolls(&[ $($x),+ ]))
-            );
-        }
-
-        // no scoring dice
-        assert_eq!(Vec::<Action>::new(), actions(&[]));
-        assert_eq!(Vec::<Action>::new(), actions(&[3]));
-        assert_eq!(Vec::<Action>::new(), actions(&[3, 4]));
-        assert_eq!(Vec::<Action>::new(), actions(&[3, 3, 6, 6]));
-
-        // with scoring dice
-        use super::Action::Pass;
-        assert_eq!(vec![Pass, roll![1]], actions(&[1, 3]));
-        assert_eq!(vec![Pass, roll![5]], actions(&[2, 3, 5, 6]));
-        assert_eq!(vec![Pass, roll![1], roll![1, 5]], actions(&[1, 2, 3, 5, 6]));
-        assert_eq!(vec![Pass, roll![1], roll![1, 1]], actions(&[1, 1, 3]));
-        assert_eq!(vec![Pass, roll![1], roll![1, 1]], actions(&[1, 1, 3, 3]));
-        assert_eq!(
-            vec![
-                Pass,
-                roll![1],
-                roll![1, 1],
-                roll![1, 1, 3, 3, 3],
-                roll![1, 3, 3, 3],
-                roll![3, 3, 3]
-            ],
-            actions(&[1, 1, 3, 3, 3])
-        );
-
-        // should include hold (straight ++ 5) action
-        assert_eq!(
-            vec![
-                Pass,
-                roll![2, 3, 4, 5, 5, 6],
-                roll![2, 3, 4, 5, 6],
-                roll![5],
-                roll![5, 5],
-            ],
-            actions(&[2, 3, 4, 5, 5, 6]),
-        );
-
-        assert_eq!(
-            vec![
-                Pass,
-                roll![1],
-                roll![1, 1],
-                roll![1, 1, 2, 3, 4, 5],
-                roll![1, 1, 5],
-                roll![1, 2, 3, 4, 5],
-            ],
-            actions(&[1, 1, 2, 3, 4, 5]),
-        );
-    }
-
-    #[test]
-    fn test_p_rv_lte_itself() {
-        let cdf = Array1::from_vec(vec![0.1, 0.6, 1.0]);
-        assert_relative_eq!(0.71, p_rv_lte_itself(cdf.view()));
-    }
-
-    // #[test]
-    // #[ignore]
-    // fn test_actions_by_expected_value() {
-    //     let state = State::new(0, DiceCounts::from_rolls(&[5, 5, 3, 3, 4]));
-    //
-    //     for tuple in state.actions_by_expected_value().1 {
-    //         println!("{:?}", tuple);
-    //     }
-    // }
 }

@@ -1,4 +1,4 @@
-use crate::{factorial, is_sorted_by, num_multisets};
+use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets};
 use approx::relative_eq;
 use std::{
     cmp::{self, min},
@@ -87,23 +87,39 @@ impl fmt::Display for DieKind {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DieKindCounts(ArrayVec<[(DieKind, u8); 6]>);
 
 impl DieKindCounts {
-    fn ndice(&self) -> u8 {
+    pub fn new() -> Self {
+        Self(ArrayVec::new())
+    }
+
+    pub fn all_standard(ndice: u8) -> Self {
+        let mut arr = ArrayVec::new();
+        arr.push((DieKind::Standard, ndice));
+        Self(arr)
+    }
+
+    fn from_dice_vec(dice: DiceVec) -> Self {
+        let counts = Self(
+            dice.group_by_die_kind()
+                .map(|(kind, kind_dice)| (kind, kind_dice.len()))
+                .collect(),
+        );
+        debug_assert!(counts.invariant());
+        counts
+    }
+
+    fn invariant(&self) -> bool {
+        is_total_order_by(self.0.into_iter(), |x, y| Some(x.cmp(y)))
+    }
+
+    pub fn ndice(&self) -> u8 {
         self.0
             .into_iter()
             .map(|(_kind, kind_count)| kind_count)
             .sum()
-    }
-
-    fn from_dice_vec(dice: DiceVec) -> Self {
-        Self(
-            dice.group_by_die_kind()
-                .map(|(kind, kind_dice)| (kind, kind_dice.len()))
-                .collect(),
-        )
     }
 
     fn spread_face(&self, face: u8) -> DiceVec {
@@ -124,7 +140,7 @@ impl DieKindCounts {
         nkind2.sub_assign(nkind);
     }
 
-    fn sub_counts(&mut self, other: Self) {
+    pub fn sub_counts(&mut self, other: Self) {
         for (kind, nkind) in other.0.into_iter() {
             self.sub_count(kind, nkind);
         }
@@ -138,7 +154,7 @@ impl DieKindCounts {
             .product()
     }
 
-    fn all_multisets(&self) -> Vec<DiceVec> {
+    pub fn all_multisets(&self) -> Vec<DiceVec> {
         fn rec(
             cb: &mut impl FnMut(DiceVec),
             acc: DiceVec,
@@ -246,7 +262,7 @@ pub struct DiceVec(ArrayVec<[Die; 6]>);
 impl DiceVec {
     /// A new empty list of dice.
     #[inline]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self(ArrayVec::new())
     }
 
@@ -256,7 +272,7 @@ impl DiceVec {
     // }
 
     #[inline]
-    fn from_die(die: Die) -> Self {
+    pub fn from_die(die: Die) -> Self {
         let mut dice = Self::new();
         dice.0.push(die);
         dice
@@ -276,12 +292,12 @@ impl DiceVec {
     }
 
     #[inline]
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     #[inline]
-    fn len(&self) -> u8 {
+    pub fn len(&self) -> u8 {
         self.0.len() as u8
     }
 
@@ -372,6 +388,10 @@ impl DiceVec {
         unique
     }
 
+    pub fn into_die_kind_counts(self) -> DieKindCounts {
+        DieKindCounts::from_dice_vec(self)
+    }
+
     fn die_kinds(&self) -> ArrayVec<[DieKind; 6]> {
         let mut kinds = ArrayVec::new();
         for die in self.into_iter() {
@@ -393,19 +413,19 @@ impl DiceVec {
             .map(move |kind| (kind, self.die_with_kind(kind)))
     }
 
-    fn score(&self) -> u16 {
+    pub fn score(&self) -> u16 {
         DiceCounts::from_dice_vec(*self).score()
     }
 
-    fn exact_score(&self) -> u16 {
+    pub fn exact_score(&self) -> u16 {
         DiceCounts::from_dice_vec(*self).exact_score()
     }
 
-    fn is_bust(&self) -> bool {
+    pub fn is_bust(&self) -> bool {
         DiceCounts::from_dice_vec(*self).is_bust()
     }
 
-    fn p_roll(&self) -> f64 {
+    pub fn p_roll(&self) -> f64 {
         let n = self.len();
 
         let counts = DiceCounts::from_dice_vec(*self);
@@ -464,7 +484,7 @@ impl DiceVec {
         rec(cb, DiceVec::new(), *self, ndice);
     }
 
-    fn multisets(&self, ndice: u8) -> Vec<DiceVec> {
+    pub fn multisets(&self, ndice: u8) -> Vec<DiceVec> {
         let mut out = Vec::new();
         self.multisets_cb(&mut |dice| out.push(dice), ndice);
         out
