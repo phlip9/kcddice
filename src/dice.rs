@@ -3,9 +3,13 @@ use approx::relative_eq;
 use std::{
     cmp::{self, min},
     fmt,
+    ops::AddAssign,
     str::FromStr,
 };
 use tinyvec::ArrayVec;
+
+// TODO(philiphayes): implement jokers/devils
+const FACE_JOKER: u8 = 0;
 
 pub struct DieDistr([f64; 8]);
 
@@ -45,7 +49,7 @@ impl Default for DieKind {
 impl DieKind {
     fn from_memnonic(s: &str) -> Option<Self> {
         let kind = match s {
-            "" => Self::Standard,
+            "" | "s" => Self::Standard,
             "hk" => Self::HeavenlyKingdomDie,
             "o" => Self::OddDie,
             _ => return None,
@@ -101,7 +105,7 @@ impl DieKindCounts {
         Self(arr)
     }
 
-    fn from_dice_vec(dice: DiceVec) -> Self {
+    pub fn from_dice_vec(dice: DiceVec) -> Self {
         let counts = Self(
             dice.group_by_die_kind()
                 .map(|(kind, kind_dice)| (kind, kind_dice.len()))
@@ -111,8 +115,25 @@ impl DieKindCounts {
         counts
     }
 
+    pub fn validate_init_set(&self, rolled_dice: &DiceVec) -> Result<(), String> {
+        if self.ndice() != 6 {
+            return Err(format!("initial die kinds set must contain exactly 6 dice"));
+        }
+        let rolled_kinds = rolled_dice.into_die_kind_counts();
+        if !self.is_superset_of(&rolled_kinds) {
+            return Err(format!(
+                "rolled dice can only contain dice from the initial die kinds set: \
+                 rolled kinds: '{}', initial kinds: '{}'",
+                rolled_kinds, self
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
     fn invariant(&self) -> bool {
-        is_total_order_by(self.0.into_iter(), |x, y| Some(x.cmp(y)))
+        self.ndice() <= 6 && is_total_order_by(self.0.into_iter(), |x, y| Some(x.cmp(y)))
     }
 
     pub fn ndice(&self) -> u8 {
@@ -120,6 +141,13 @@ impl DieKindCounts {
             .into_iter()
             .map(|(_kind, kind_count)| kind_count)
             .sum()
+    }
+
+    fn get_count(&self, kind: DieKind) -> u8 {
+        self.0
+            .into_iter()
+            .find_map(|(kind2, nkind2)| if kind2 == kind { Some(nkind2) } else { None })
+            .unwrap_or(0)
     }
 
     fn spread_face(&self, face: u8) -> DiceVec {
@@ -130,9 +158,30 @@ impl DieKindCounts {
         dice
     }
 
+    fn contains(&self, kind: DieKind) -> bool {
+        self.0
+            .into_iter()
+            .find(|(kind2, _)| kind2 == &kind)
+            .is_some()
+    }
+
+    fn add_count(&mut self, kind: DieKind, nkind: u8) {
+        let idx = self.0.partition_point(|(other_kind, _)| other_kind < &kind);
+
+        if let Some((kind2, nkind2)) = self.0.get_mut(idx) {
+            if kind2 == &kind {
+                nkind2.add_assign(nkind);
+                return;
+            }
+        }
+
+        self.0.insert(idx, (kind, nkind));
+        debug_assert!(self.invariant());
+    }
+
     fn sub_count(&mut self, kind: DieKind, nkind: u8) {
         use std::ops::SubAssign;
-        let (kind2, nkind2) = self
+        let (_kind2, nkind2) = self
             .0
             .iter_mut()
             .find(|(kind2, _nkind2)| kind == *kind2)
@@ -141,9 +190,17 @@ impl DieKindCounts {
     }
 
     pub fn sub_counts(&mut self, other: Self) {
+        debug_assert!(self.is_superset_of(&other));
         for (kind, nkind) in other.0.into_iter() {
             self.sub_count(kind, nkind);
         }
+    }
+
+    pub fn is_superset_of(&self, other: &Self) -> bool {
+        other
+            .0
+            .into_iter()
+            .all(|(other_kind, other_nkind)| self.get_count(other_kind) >= other_nkind)
     }
 
     fn num_multisets(&self, nfaces: u32) -> u32 {
@@ -173,7 +230,7 @@ impl DieKindCounts {
             }
 
             // "spread" the current face across the possible dice kinds
-            // like [_: 3, hk: 2, o: 1].spread_face(1) => [1, 1, 1, 1hk, 1hk, 1o]
+            // like [s:3,hk:2,o:1].spread_face(1) => [1, 1, 1, 1hk, 1hk, 1o]
             let spread_dice = kind_counts.spread_face(current_face);
 
             // choose how many times we'll repeat this face
@@ -200,7 +257,74 @@ impl DieKindCounts {
     }
 }
 
-const FACE_JOKER: u8 = 0;
+impl fmt::Display for DieKindCounts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let entries = self
+            .0
+            .into_iter()
+            .map(|(kind, nkind)| format!("{}:{}", kind.as_memnonic(), nkind));
+
+        f.debug_list().entries(entries).finish()
+    }
+}
+
+impl FromIterator<(DieKind, u8)> for DieKindCounts {
+    fn from_iter<T: IntoIterator<Item = (DieKind, u8)>>(iter: T) -> Self {
+        let mut arr = ArrayVec::from_iter(iter.into_iter());
+        arr.sort_unstable();
+
+        let kinds = Self(arr);
+        assert!(kinds.invariant());
+        kinds
+    }
+}
+
+// [s:3,hk:2,o:1]
+
+impl FromStr for DieKindCounts {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut kinds = DieKindCounts::new();
+
+        let s = s.trim_start_matches('[');
+        let s = s.trim_end_matches(']');
+
+        let splitters = &[',', ' ', '\n', '\t'];
+
+        for kind_count_str in s.split(splitters).filter(|s| !s.is_empty()) {
+            match kind_count_str.split_once(':') {
+                Some((kind_str, count_str)) => {
+                    let kind = DieKind::from_memnonic(kind_str)
+                        .ok_or_else(|| format!("didn't recognize die kind: '{}'", kind_str))?;
+
+                    if kinds.contains(kind) {
+                        return Err(format!(
+                            "the dice kinds set can't contain any duplicates: already contains kind: '{}'",
+                            kind.as_memnonic(),
+                        ));
+                    }
+
+                    let count = count_str.parse::<u8>().map_err(|err| {
+                        format!("failed to parse die count: '{}', error: {}", count_str, err)
+                    })?;
+
+                    if !(1..=6).contains(&count) {
+                        return Err(format!(
+                            "die count needs to be in the range [1,6]: '{}'",
+                            count
+                        ));
+                    }
+
+                    kinds.add_count(kind, count);
+                }
+                None => return Err("".to_string()),
+            }
+        }
+
+        Ok(kinds)
+    }
+}
 
 #[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Die {
@@ -301,6 +425,7 @@ impl DiceVec {
         self.0.len() as u8
     }
 
+    #[cfg(debug_assertions)]
     fn invariant(&self) -> bool {
         is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
     }
@@ -967,7 +1092,7 @@ mod test {
     use super::*;
     use crate::num_combinations;
     use approx::assert_relative_eq;
-    use claim::{assert_gt, assert_lt};
+    use claim::{assert_err, assert_gt, assert_lt};
     use std::collections::HashSet;
 
     macro_rules! dice {
@@ -1251,5 +1376,35 @@ mod test {
                 epsilon = 1e-10,
             );
         }
+    }
+
+    #[test]
+    fn test_die_kind_counts_from_str() {
+        use super::DieKind::{HeavenlyKingdomDie as hk, OddDie as o, Standard as s};
+
+        assert_err!(DieKindCounts::from_str("[s:0]"));
+        assert_err!(DieKindCounts::from_str("[s:7]"));
+        assert_err!(DieKindCounts::from_str("[hk:2,o:1,s:7]"));
+        assert_err!(DieKindCounts::from_str("[s:1,o:1,s:1]"));
+        assert_eq!(
+            DieKindCounts::from_iter([(s, 6)]),
+            DieKindCounts::from_str("[s:6]").unwrap(),
+        );
+        assert_eq!(
+            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
+            DieKindCounts::from_str("[s:3,hk:2,o:1]").unwrap(),
+        );
+        assert_eq!(
+            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
+            DieKindCounts::from_str("[o:1,hk:2,s:3]").unwrap(),
+        );
+        assert_eq!(
+            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
+            DieKindCounts::from_str("[ s:3, hk:2, o:1 ]").unwrap(),
+        );
+        assert_eq!(
+            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
+            DieKindCounts::from_str(" s:3, hk:2, o:1 ").unwrap(),
+        );
     }
 }
