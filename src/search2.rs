@@ -76,7 +76,7 @@ impl Context {
         }
     }
 
-    fn set_all_dice(&mut self, all_dice: DieKindCounts) {
+    pub fn set_all_dice(&mut self, all_dice: DieKindCounts) {
         self.all_dice = all_dice;
     }
 

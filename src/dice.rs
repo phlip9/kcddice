@@ -115,12 +115,11 @@ impl DieKindCounts {
         counts
     }
 
-    pub fn validate_init_set(&self, rolled_dice: &DiceVec) -> Result<(), String> {
+    pub fn validate_init_set(&self, rolled_kinds: &DieKindCounts) -> Result<(), String> {
         if self.ndice() != 6 {
             return Err(format!("initial die kinds set must contain exactly 6 dice"));
         }
-        let rolled_kinds = rolled_dice.into_die_kind_counts();
-        if !self.is_superset_of(&rolled_kinds) {
+        if !self.is_superset_of(rolled_kinds) {
             return Err(format!(
                 "rolled dice can only contain dice from the initial die kinds set: \
                  rolled kinds: '{}', initial kinds: '{}'",
@@ -1390,7 +1389,7 @@ mod test {
         }
 
         // comment this if we're testing exhaustively, o.w. takes a few secs
-        let die_kind_combs = die_kind_combs.into_iter().step(12);
+        let die_kind_combs = die_kind_combs.into_iter().step_by(12);
 
         for die_kinds in die_kind_combs {
             assert_relative_eq!(

@@ -1,7 +1,7 @@
 use crate::{
-    dice::DiceCounts,
+    dice::{DiceCounts, DiceVec, DieKindCounts},
     search::{p_rv_lte_itself, Action, Context, MarkovMatrix, NormalizedStateAction, State},
-    DEFAULT_TARGET_SCORE,
+    search2, DEFAULT_TARGET_SCORE,
 };
 use pico_args::{self, Arguments};
 use std::time::Instant;
@@ -25,7 +25,8 @@ pub trait Command: Sized {
 pub struct BestActionCommand {
     round_total: u16,
     target_score: u16,
-    rolled_dice: DiceCounts,
+    rolled_dice: DiceVec,
+    all_dice: DieKindCounts,
 }
 
 impl Command for BestActionCommand {
@@ -41,6 +42,11 @@ EXAMPLES:
 OPTIONS:
     · --target-score / -t score (default: 4000)
       The score needed to win the game
+
+    · --die-kinds / -k [s:n,hk:m,o:n,..] (default: [s:6])
+      The kinds of dice we're using this game.
+      For example, using 3 Standard, 2 HeavenlyKingdom, 1 Odd would be formatted
+      as -k [s:3,hk:2,o:1]
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
@@ -53,7 +59,14 @@ OPTIONS:
                 .opt_value_from_str(["--target-score", "-t"])
                 .map_err(|err| err.to_string())?
                 .unwrap_or(DEFAULT_TARGET_SCORE),
+            all_dice: args
+                .opt_value_from_str(["--die-kinds", "-k"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DieKindCounts::all_standard(6)),
         };
+
+        cmd.all_dice
+            .validate_init_set(&DieKindCounts::from_dice_vec(cmd.rolled_dice))?;
 
         let remaining = args.finish();
         if !remaining.is_empty() {
@@ -64,8 +77,9 @@ OPTIONS:
     }
 
     fn run(self) {
-        let state = State::new(self.round_total, self.target_score, self.rolled_dice);
-        let mut ctxt = Context::new();
+        let state = search2::State::new(self.round_total, self.target_score, self.rolled_dice);
+        let mut ctxt = search2::Context::new();
+        ctxt.set_all_dice(self.all_dice);
 
         let start_time = Instant::now();
         let actions_values = state.actions_by_expected_value(&mut ctxt);
@@ -83,8 +97,8 @@ OPTIONS:
             let value_str = format!("{:0.1}", value);
             let p_bust_str = format!("{:0.2}", p_bust);
             let (action_str, dice_str) = match action {
-                Action::Pass => ("pass", String::new()),
-                Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
+                search2::Action::Pass => ("pass", String::new()),
+                search2::Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
             };
             table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
         }
@@ -143,7 +157,8 @@ OPTIONS:
 pub struct ScoreDistrCommand {
     round_total: u16,
     target_score: u16,
-    ndice_left: u8,
+    dice_left: DieKindCounts,
+    all_dice: DieKindCounts,
 }
 
 impl Command for ScoreDistrCommand {
@@ -151,7 +166,7 @@ impl Command for ScoreDistrCommand {
 kcddice score-distr - TODO
 
 USAGE:
-    kcddice score-distr [option ...] <round-total> <target-score> <ndice-left>
+    kcddice score-distr [option ...] <round-total> <target-score> <dice-left>
 ";
 
     fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
@@ -160,8 +175,14 @@ USAGE:
         let cmd = Self {
             round_total: args.free_from_str().map_err(|err| err.to_string())?,
             target_score: args.free_from_str().map_err(|err| err.to_string())?,
-            ndice_left: args.free_from_str().map_err(|err| err.to_string())?,
+            dice_left: args.free_from_str().map_err(|err| err.to_string())?,
+            all_dice: args
+                .opt_value_from_str(["--die-kinds", "-k"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DieKindCounts::all_standard(6)),
         };
+
+        cmd.all_dice.validate_init_set(&cmd.dice_left)?;
 
         let remaining = args.finish();
         if !remaining.is_empty() {
@@ -172,10 +193,14 @@ USAGE:
     }
 
     fn run(self) {
-        let qstate =
-            NormalizedStateAction::new(self.round_total, self.target_score, self.ndice_left);
+        let qstate = search2::NormalizedStateAction::new(
+            self.round_total,
+            self.target_score,
+            self.dice_left,
+        );
 
-        let mut ctxt = Context::new();
+        let mut ctxt = search2::Context::new();
+        ctxt.set_all_dice(self.all_dice);
 
         let start_time = Instant::now();
         let score_pmf = qstate.score_distribution(&mut ctxt);
