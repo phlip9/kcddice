@@ -131,7 +131,6 @@ impl DieKindCounts {
         Ok(())
     }
 
-    #[cfg(debug_assertions)]
     fn invariant(&self) -> bool {
         self.ndice() <= 6 && is_total_order_by(self.0.into_iter(), |x, y| Some(x.cmp(y)))
     }
@@ -259,12 +258,13 @@ impl DieKindCounts {
 
 impl fmt::Display for DieKindCounts {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let entries = self
+        use itertools::Itertools;
+        let inner = self
             .0
             .into_iter()
-            .map(|(kind, nkind)| format!("{}:{}", kind.as_memnonic(), nkind));
-
-        f.debug_list().entries(entries).finish()
+            .map(|(kind, kind_count)| format!("{}:{}", kind.as_memnonic(), kind_count))
+            .join(", ");
+        write!(f, "[{}]", inner)
     }
 }
 
@@ -425,7 +425,6 @@ impl DiceVec {
         self.0.len() as u8
     }
 
-    #[cfg(debug_assertions)]
     fn invariant(&self) -> bool {
         is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
     }
@@ -550,17 +549,14 @@ impl DiceVec {
         DiceCounts::from_dice_vec(*self).is_bust()
     }
 
+    /// Return the probability of rolling this set of dice, potentially containing
+    /// many different kinds of dice with different die distributions.
     pub fn p_roll(&self) -> f64 {
-        let n = self.len();
-
-        let counts = DiceCounts::from_dice_vec(*self);
-        let prod = (1..=6)
-            .map(|face| factorial(counts.get_count(face) as u32))
-            .product::<u32>();
-        let n_multiset_perms = factorial(n as u32) / prod;
-
-        let p_joint = self.into_iter().map(Die::p_die).product::<f64>();
-        p_joint * (n_multiset_perms as f64)
+        self.group_by_die_kind()
+            .map(|(kind, dice_kind)| {
+                DiceCounts::from_dice_vec(dice_kind).p_roll_with_distr(kind.die_distr())
+            })
+            .product()
     }
 
     fn multisets_cb(&self, cb: &mut impl FnMut(DiceVec), ndice: u8) {
@@ -872,7 +868,8 @@ impl DiceCounts {
         relative_eq!(self.score() as f64, 0.0)
     }
 
-    /// Return the probability of rolling this set of dice.
+    /// Return the probability of rolling this set of dice (assuming all standard
+    /// dice).
     ///
     /// let n = number of dice in the set
     ///     P = n! / (6^n * ∏_{i∈[1,6]} c_i!)
@@ -887,6 +884,21 @@ impl DiceCounts {
         let m = 6_u32.pow(n as u32);
 
         (factorial(n as u32) as f64) / ((prod * m) as f64)
+    }
+
+    /// Return the probability of rolling this set of dice, with faces weighted
+    /// according to the die distribution `distr`.
+    pub fn p_roll_with_distr(self, distr: DieDistr) -> f64 {
+        let n = self.len() as u32;
+
+        let (prod, p_joint) = (1..=6).fold((1, 1.0), |(prod, p_joint), face| {
+            let nface = self.get_count(face);
+            let prod = prod * factorial(nface as u32);
+            let p_joint = p_joint * distr.p_face(face).powi(nface as i32);
+            (prod, p_joint)
+        });
+
+        ((factorial(n) / prod) as f64) * p_joint
     }
 
     pub fn to_rolls(self) -> Vec<u8> {
@@ -1093,6 +1105,7 @@ mod test {
     use crate::num_combinations;
     use approx::assert_relative_eq;
     use claim::{assert_err, assert_gt, assert_lt};
+    use itertools::Itertools;
     use std::collections::HashSet;
 
     macro_rules! dice {
@@ -1131,7 +1144,7 @@ mod test {
     }
 
     #[test]
-    fn test_counts_score() {
+    fn test_dice_counts_score() {
         assert_eq!(0, DiceCounts::from_rolls(&[]).score());
         assert_eq!(100, DiceCounts::from_rolls(&[1]).score());
         assert_eq!(150, DiceCounts::from_rolls(&[5, 1]).score());
@@ -1146,7 +1159,7 @@ mod test {
     }
 
     #[test]
-    fn test_counts_from_rolls() {
+    fn test_dice_counts_from_rolls() {
         assert!(DiceCounts::from_rolls(&[]).is_empty());
 
         assert_eq!(0, DiceCounts::from_rolls(&[]).len());
@@ -1327,41 +1340,7 @@ mod test {
     }
 
     #[test]
-    fn test_dice_vec_p_roll() {
-        // rolling just standard dice should give approx. the same result as
-        // DiceCounts::p_roll
-        assert_relative_eq!(
-            dice![1, 1, 1, 2, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 1, 2, 2, 3]).p_roll(),
-        );
-        assert_relative_eq!(
-            dice![1, 1, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
-        );
-
-        // rolling a 2 with the Odd Die has a lower probability than uniform
-        assert_lt!(
-            dice![1, 1, 2, 2, 2o, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 2, 2, 3]).p_roll(),
-        );
-        assert_lt!(
-            dice![1, 1, 2o, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
-        );
-
-        // rolling a 1 with the Odd Die has a greater probability than uniform
-        assert_gt!(
-            dice![1, 1o, 2, 2, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 2, 2, 3]).p_roll(),
-        );
-        assert_gt!(
-            dice![1, 1o, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
-        );
-    }
-
-    #[test]
-    fn test_counts_probability() {
+    fn test_dice_counts_probability() {
         assert_relative_eq!(
             3.0 / ((6.0_f64).powf(3.0)),
             DiceCounts::from_rolls(&[1, 1, 3]).p_roll()
@@ -1374,6 +1353,54 @@ mod test {
                     .map(|counts| counts.p_roll())
                     .sum::<f64>(),
                 epsilon = 1e-10,
+            );
+        }
+    }
+
+    #[test]
+    fn test_dice_vec_p_roll() {
+        // rolling just standard dice should give approx. the same result as
+        // DiceCounts::p_roll
+        assert_relative_eq!(
+            dice![1, 1, 1, 2, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 1, 2, 2, 3]).p_roll(),
+        );
+        assert_relative_eq!(
+            dice![1, 1, 2, 3].p_roll(),
+            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
+        );
+
+        use super::DieKind::{HeavenlyKingdomDie as hk, OddDie as o, Standard as s};
+
+        // exhaustively check that all combinations of {s, hk, o} die kinds will
+        // emit proper probability mass functions (where the pmf is effectively
+        // { pmf(dice) := dice.p_roll()) | dice ∈ die_kinds.all_multisets() }
+
+        let mut die_kind_combs = Vec::new();
+
+        for ndice in 0..=6 {
+            for ns in 0..=ndice {
+                let nleft = ndice - ns;
+                for nhk in 0..=nleft {
+                    let no = nleft - nhk;
+
+                    die_kind_combs.push(DieKindCounts::from_iter([(s, ns), (hk, nhk), (o, no)]))
+                }
+            }
+        }
+
+        // comment this if we're testing exhaustively, o.w. takes a few secs
+        let die_kind_combs = die_kind_combs.into_iter().step(12);
+
+        for die_kinds in die_kind_combs {
+            assert_relative_eq!(
+                1.0,
+                die_kinds
+                    .all_multisets()
+                    .into_iter()
+                    .map(|dice| dice.p_roll())
+                    .sum(),
+                epsilon = 1.0e-10
             );
         }
     }
