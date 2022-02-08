@@ -234,6 +234,7 @@ USAGE:
 #[derive(Debug)]
 pub struct MarkovMatrixCommand {
     target_score: u16,
+    all_dice: DieKindCounts,
 }
 
 impl Command for MarkovMatrixCommand {
@@ -248,7 +249,13 @@ impl Command for MarkovMatrixCommand {
                 .opt_free_from_str()
                 .map_err(|err| err.to_string())?
                 .unwrap_or(DEFAULT_TARGET_SCORE),
+            all_dice: args
+                .opt_value_from_str(["--die-kinds", "-k"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DieKindCounts::all_standard(6)),
         };
+
+        cmd.all_dice.validate_init_set(&cmd.all_dice)?;
 
         let remaining = args.finish();
         if !remaining.is_empty() {
@@ -260,7 +267,7 @@ impl Command for MarkovMatrixCommand {
 
     fn run(self) {
         let start_time = Instant::now();
-        let matrix = MarkovMatrix::from_optimal_policy(self.target_score);
+        let matrix = search2::MarkovMatrix::from_optimal_policy(self.all_dice, self.target_score);
         let search_duration = start_time.elapsed();
 
         println!("{:?}", matrix);
@@ -272,6 +279,8 @@ impl Command for MarkovMatrixCommand {
 pub struct TurnsCdfCommand {
     target_score: u16,
     max_num_turns: usize,
+    our_dice: DieKindCounts,
+    their_dice: DieKindCounts,
 }
 
 impl Command for TurnsCdfCommand {
@@ -284,7 +293,18 @@ impl Command for TurnsCdfCommand {
         let cmd = Self {
             target_score: args.free_from_str().map_err(|err| err.to_string())?,
             max_num_turns: args.free_from_str().map_err(|err| err.to_string())?,
+            our_dice: args
+                .opt_value_from_str(["--our-die-kinds", "-o"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DieKindCounts::all_standard(6)),
+            their_dice: args
+                .opt_value_from_str(["--their-die-kinds", "-t"])
+                .map_err(|err| err.to_string())?
+                .unwrap_or(DieKindCounts::all_standard(6)),
         };
+
+        cmd.our_dice.validate_init_set(&cmd.our_dice)?;
+        cmd.their_dice.validate_init_set(&cmd.their_dice)?;
 
         let remaining = args.finish();
         if !remaining.is_empty() {
@@ -296,24 +316,52 @@ impl Command for TurnsCdfCommand {
 
     fn run(self) {
         let start_time = Instant::now();
-        let matrix = MarkovMatrix::from_optimal_policy(self.target_score);
-        let turns_cdf = matrix.turns_to_win_cdf(self.max_num_turns);
+
+        let our_matrix =
+            search2::MarkovMatrix::from_optimal_policy(self.our_dice, self.target_score);
+        let our_turns_cdf = our_matrix.turns_to_win_cdf(self.max_num_turns);
+
+        let their_turns_cdf = if self.our_dice == self.their_dice {
+            our_turns_cdf.clone()
+        } else {
+            let their_matrix =
+                search2::MarkovMatrix::from_optimal_policy(self.their_dice, self.target_score);
+            their_matrix.turns_to_win_cdf(self.max_num_turns)
+        };
+
         let search_duration = start_time.elapsed();
 
+        println!("their turns CDF");
         println!("turn\tcumulative probability");
 
         for turn in 1..=self.max_num_turns {
-            println!("{}\t{}", turn, turns_cdf[turn - 1]);
+            println!("{}\t{}", turn, their_turns_cdf[turn - 1]);
         }
 
-        // Assuming we play against ourselves and always go first, what is our a
-        // priori win probability (before we even roll the first dice)? This is
-        // useful for deciding how much to bet (e.g., following the
+        println!("\nour turns CDF");
+        println!("turn\tcumulative probability");
+
+        for turn in 1..=self.max_num_turns {
+            println!("{}\t{}", turn, our_turns_cdf[turn - 1]);
+        }
+
+        // Assuming we always go first and play optimally, what is our a priori
+        // win probability against an opponent that also plays optimally, but
+        // may have different dice?
+        //
+        // Assuming the our # turns to win is modeled as a r.v. X_1 ~ our_turns_cdf
+        // and the opponent's is modeled by independent r.v. X_2 ~ their_turns_cdf,
+        // the win probability is (mostly) the same as `Pr[X_1 <= X_2]`, i.e., the
+        // probability we (independently) finish the game in less turns than the
+        // opponent.
+        //
+        // This is useful for deciding how much to bet (e.g., following the
         // Kelley-Criterion).
         //
-        // For the typical setup (target=4000, 6 normal dice), this is ≈0.562.
-        // The Kelley-Criterion optimal bet is then 12.5% of your total wealth.
-        let p_win = p_rv_lte_itself(turns_cdf.view());
+        // For the typical setup (target=4000, our dice=6 normal, their dice=6
+        // normal), this is ≈0.562. The Kelley-Criterion optimal bet is then 12.5%
+        // of your total wealth.
+        let p_win = search2::p_rv1_lte_rv2(our_turns_cdf.view(), their_turns_cdf.view());
 
         let mut table = Table::new("{:>}  {:<}");
         table.add_row(row!("search_duration", format!("{:.2?}", search_duration)));

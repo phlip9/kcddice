@@ -1,8 +1,8 @@
 use crate::{
     dice::{DiceVec, DieKindCounts},
-    search::ScorePMF,
     total_cmp_f64,
 };
+use ndarray::{s, Array1, Array2, ArrayView1};
 use std::{cell::Cell, cmp, collections::HashMap};
 
 ////////////
@@ -548,5 +548,326 @@ impl State {
         // sort by the expected turn score from highest to lowest.
         actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
         actions_values
+    }
+}
+
+///////////////
+// Score PMF //
+///////////////
+
+#[derive(Clone, Debug)]
+pub struct ScorePMF(HashMap<u16, f64>);
+
+impl ScorePMF {
+    #[inline]
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    #[inline]
+    pub fn constant(score: u16) -> Self {
+        let mut pmf = HashMap::new();
+        pmf.insert(score, 1.0);
+        Self(pmf)
+    }
+
+    #[inline]
+    pub fn bust() -> Self {
+        Self::constant(0)
+    }
+
+    pub fn into_vec(self) -> Vec<(u16, f64)> {
+        self.0.into_iter().collect()
+    }
+
+    fn into_dense(&self, target_score: u16) -> Array1<f64> {
+        let num_states = MarkovMatrix::num_states(target_score);
+
+        let mut dense_pmf = Array1::zeros(num_states);
+
+        for state_idx in 0..num_states {
+            dense_pmf[state_idx] = self
+                .0
+                .get(&MarkovMatrix::i2s(state_idx))
+                .copied()
+                .unwrap_or(0.0);
+        }
+
+        dense_pmf
+    }
+
+    pub fn expected_value(&self) -> f64 {
+        self.0
+            .iter()
+            .map(|(&score, &p_score)| p_score * (score as f64))
+            .sum()
+    }
+
+    pub fn add_conditional_distr(&mut self, p_cond: f64, cond_distr: &Self) {
+        use std::ops::AddAssign;
+        for (&score, &p_score) in &cond_distr.0 {
+            self.0
+                .entry(score)
+                .or_insert(0.0)
+                .add_assign(p_cond * p_score);
+        }
+    }
+
+    pub fn total_mass(&self) -> f64 {
+        self.0.values().sum()
+    }
+}
+
+#[derive(Debug)]
+pub struct MarkovMatrix(Array2<f64>);
+
+impl MarkovMatrix {
+    /// score to state index
+    #[inline]
+    const fn s2i(score: u16) -> usize {
+        (score / 50) as usize
+    }
+
+    /// state index to score
+    #[inline]
+    const fn i2s(state_idx: usize) -> u16 {
+        (state_idx * 50) as u16
+    }
+
+    #[inline]
+    const fn num_states(target_score: u16) -> usize {
+        Self::s2i(target_score) + 1
+    }
+
+    pub fn from_optimal_policy(all_dice: DieKindCounts, target_score: u16) -> Self {
+        let num_states = Self::num_states(target_score);
+
+        let mut matrix = Array2::zeros((num_states, num_states));
+
+        // compute the score distribution for each possible intermediate accumulated
+        // turn score, then assemble into a matrix where each column x_i is the
+        // score distribution pmf starting with turn score i*50.
+        for turn_score_idx in Self::s2i(0)..Self::s2i(target_score) {
+            let turn_score = Self::i2s(turn_score_idx);
+
+            let mut ctxt = Context::new();
+            ctxt.set_all_dice(all_dice);
+            let qstate = NormalizedStateAction::new(0, target_score - turn_score, all_dice);
+
+            let score_pmf = qstate
+                .score_distribution(&mut ctxt)
+                .into_dense(target_score);
+
+            matrix
+                .slice_mut(s![turn_score_idx.., turn_score_idx])
+                .assign(&score_pmf.slice(s![..num_states - turn_score_idx]));
+        }
+
+        // remember to set the absorber column [0 0 .. 1] last (if we've won the
+        // game, we stay in the win state forever).
+        matrix[[num_states - 1, num_states - 1]] = 1.0;
+
+        Self(matrix)
+    }
+
+    pub fn turns_to_win_cdf(&self, max_num_turns: usize) -> Array1<f64> {
+        let n = self.0.nrows();
+        let mut accum = Array2::<f64>::eye(n);
+
+        let mut turns_cdf = Array1::<f64>::zeros(max_num_turns);
+
+        for turn in 0..max_num_turns {
+            // A^i+1 = A^i * A
+            accum = accum.dot(&self.0);
+            // P[win on turn i] = (A^i · [1 0 .. 0]^T)_{n-1} = (A^i)_{n-1,0}
+            turns_cdf[turn] = accum[[n - 1, 0]];
+        }
+
+        turns_cdf
+    }
+}
+
+/// Given `X_1` and `X_2` independent random variables defined by the same CDF
+/// `cdf`, returns the `Pr[X_1 <= X_2]`.
+pub fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
+    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
+    let p = 0.0;
+
+    // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
+    let c_i1 = 0.0;
+
+    let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
+        // c_i = cdf[i]
+
+        // p_1 = Pr[X_1 = x_i]
+        //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
+        //     = cdf[i] - cdf[i - 1]
+        let p_1 = c_i - c_i1;
+
+        // p_2 = Pr[X_2 >= x_i]
+        //     = 1 - Pr[X_2 < x_i]
+        //     = 1 - Pr[X_2 <= prev(x_i)]
+        //     = 1 - cdf[i - 1]
+        let p_2 = 1.0 - c_i1;
+
+        (p + (p_1 * p_2), c_i)
+    });
+
+    p
+}
+
+/// Given `X_1` and `X_2` independent random variables defined by CDFs `cdf1` and
+/// `cdf2` respectively, returns the `Pr[X_1 <= X_2]`. Both "CDF" arrays must be
+/// the same length and have the same support at each index.
+pub fn p_rv1_lte_rv2(cdf1: ArrayView1<f64>, cdf2: ArrayView1<f64>) -> f64 {
+    assert_eq!(cdf1.len(), cdf2.len());
+
+    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
+    let p = 0.0;
+
+    // c1_i1 = cdf1[i - 1] = Pr[X_1 <= prev(x_i)]
+    let c1_i1 = 0.0;
+
+    // c2_i1 = cdf2[i - 1] = Pr[X_2 <= prev(x_i)]
+    let c2_i1 = 0.0;
+
+    let (p, _c1_i1, _c2_i2) = cdf1.into_iter().zip(cdf2.into_iter()).fold(
+        (p, c1_i1, c2_i1),
+        |(p, c1_i1, c2_i1), (&c1_i, &c2_i)| {
+            // c1_i = cdf1[i] = Pr[X_1 <= x_i]
+            // c2_i = cdf2[i] = Pr[X_2 <= x_i]
+
+            // p_1 = Pr[X_1 = x_i]
+            //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
+            //     = cdf1[i] - cdf1[i - 1]
+            let p_1 = c1_i - c1_i1;
+
+            // p_2 = Pr[X_2 >= x_i]
+            //     = 1 - Pr[X_2 < x_i]
+            //     = 1 - Pr[X_2 <= prev(x_i)]
+            //     = 1 - cdf2[i - 1]
+            let p_2 = 1.0 - c2_i1;
+
+            (p + (p_1 * p_2), c1_i, c2_i)
+        },
+    );
+
+    p
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{dice::Die, DEFAULT_TARGET_SCORE};
+    use approx::assert_relative_eq;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_gen_actions() {
+        fn actions(rolled_dice: DiceVec) -> Vec<Action> {
+            let state = State::new(0, DEFAULT_TARGET_SCORE, rolled_dice);
+            let mut actions = state.actions();
+            actions.sort_unstable();
+            actions
+        }
+
+        macro_rules! dice {
+            () => {
+                DiceVec::new()
+            };
+            ($($x:tt),+ $(,)?) => {
+                DiceVec::from_iter([ $( Die::from_str(stringify!($x)).unwrap() ),+ ].into_iter())
+            };
+        }
+
+        // no scoring dice
+        assert_eq!(Vec::<Action>::new(), actions(dice![]));
+        assert_eq!(Vec::<Action>::new(), actions(dice![3]));
+        assert_eq!(Vec::<Action>::new(), actions(dice![3, 4]));
+        assert_eq!(Vec::<Action>::new(), actions(dice![3, 3, 6, 6]));
+
+        // with scoring dice
+        use super::Action::{Pass, Roll};
+        assert_eq!(vec![Pass, Roll(dice![1])], actions(dice![1, 3]));
+        assert_eq!(vec![Pass, Roll(dice![5])], actions(dice![2, 3, 5, 6]));
+        assert_eq!(
+            vec![Pass, Roll(dice![1]), Roll(dice![1, 5]), Roll(dice![5])],
+            actions(dice![1, 2, 3, 5, 6])
+        );
+        assert_eq!(
+            vec![Pass, Roll(dice![1]), Roll(dice![1, 1])],
+            actions(dice![1, 1, 3])
+        );
+        assert_eq!(
+            vec![Pass, Roll(dice![1]), Roll(dice![1, 1])],
+            actions(dice![1, 1, 3, 3])
+        );
+        assert_eq!(
+            vec![
+                Pass,
+                Roll(dice![1]),
+                Roll(dice![1, 3, 3, 3]),
+                Roll(dice![1, 3, 3, 3, 5]),
+                Roll(dice![1, 5]),
+                Roll(dice![3, 3, 3]),
+                Roll(dice![3, 3, 3, 5]),
+                Roll(dice![5]),
+            ],
+            actions(dice![1, 3, 3, 3, 5])
+        );
+
+        // should include hold (straight ++ 5) action
+        assert_eq!(
+            vec![
+                Pass,
+                Roll(dice![2, 3, 4, 5, 5, 6]),
+                Roll(dice![2, 3, 4, 5, 6]),
+                Roll(dice![5]),
+                Roll(dice![5, 5]),
+            ],
+            actions(dice![2, 3, 4, 5, 5, 6]),
+        );
+
+        assert_eq!(
+            vec![
+                Pass,
+                Roll(dice![1]),
+                Roll(dice![1, 1]),
+                Roll(dice![1, 1, 2, 3, 4, 5]),
+                Roll(dice![1, 1, 5]),
+                Roll(dice![1, 2, 3, 4, 5]),
+                Roll(dice![1, 5]),
+                Roll(dice![5]),
+            ],
+            actions(dice![1, 1, 2, 3, 4, 5]),
+        );
+    }
+
+    #[test]
+    fn test_p_rv_lte_itself() {
+        let cdf = Array1::from_vec(vec![0.1, 0.6, 1.0]);
+        assert_relative_eq!(0.71, p_rv_lte_itself(cdf.view()));
+    }
+
+    #[test]
+    fn test_p_rv1_lte_rv2() {
+        let cdf1 = Array1::from_vec(vec![0.1, 0.6, 1.0]);
+        let cdf2 = Array1::from_vec(vec![0.3, 0.7, 1.0]);
+
+        assert_relative_eq!(
+            p_rv_lte_itself(cdf1.view()),
+            p_rv1_lte_rv2(cdf1.view(), cdf1.view())
+        );
+
+        assert_relative_eq!(
+            p_rv_lte_itself(cdf2.view()),
+            p_rv1_lte_rv2(cdf2.view(), cdf2.view())
+        );
+
+        assert_relative_eq!(0.57, p_rv1_lte_rv2(cdf1.view(), cdf2.view()));
     }
 }
