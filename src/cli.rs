@@ -1,6 +1,9 @@
 use crate::{
     dice::{DiceCounts, DiceVec, DieKindCounts},
-    search2, DEFAULT_TARGET_SCORE,
+    search::{
+        p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, ScorePMF, State,
+    },
+    DEFAULT_TARGET_SCORE,
 };
 use pico_args::{self, Arguments};
 use std::time::Instant;
@@ -76,8 +79,8 @@ OPTIONS:
     }
 
     fn run(self) {
-        let state = search2::State::new(self.round_total, self.target_score, self.rolled_dice);
-        let mut ctxt = search2::Context::new();
+        let state = State::new(self.round_total, self.target_score, self.rolled_dice);
+        let mut ctxt = Context::new();
         ctxt.set_all_dice(self.all_dice);
 
         let start_time = Instant::now();
@@ -96,8 +99,8 @@ OPTIONS:
             let value_str = format!("{:0.1}", value);
             let p_bust_str = format!("{:0.2}", p_bust);
             let (action_str, dice_str) = match action {
-                search2::Action::Pass => ("pass", String::new()),
-                search2::Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
+                Action::Pass => ("pass", String::new()),
+                Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
             };
             table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
         }
@@ -192,13 +195,10 @@ USAGE:
     }
 
     fn run(self) {
-        let qstate = search2::NormalizedStateAction::new(
-            self.round_total,
-            self.target_score,
-            self.dice_left,
-        );
+        let qstate =
+            NormalizedStateAction::new(self.round_total, self.target_score, self.dice_left);
 
-        let mut ctxt = search2::Context::new();
+        let mut ctxt = Context::new();
         ctxt.set_all_dice(self.all_dice);
 
         let start_time = Instant::now();
@@ -266,7 +266,7 @@ impl Command for MarkovMatrixCommand {
 
     fn run(self) {
         let start_time = Instant::now();
-        let matrix = search2::MarkovMatrix::from_optimal_policy(self.all_dice, self.target_score);
+        let matrix = MarkovMatrix::from_optimal_policy(self.all_dice, self.target_score);
         let search_duration = start_time.elapsed();
 
         println!("{:?}", matrix);
@@ -316,15 +316,14 @@ impl Command for TurnsCdfCommand {
     fn run(self) {
         let start_time = Instant::now();
 
-        let our_matrix =
-            search2::MarkovMatrix::from_optimal_policy(self.our_dice, self.target_score);
+        let our_matrix = MarkovMatrix::from_optimal_policy(self.our_dice, self.target_score);
         let our_turns_cdf = our_matrix.turns_to_win_cdf(self.max_num_turns);
 
         let their_turns_cdf = if self.our_dice == self.their_dice {
             our_turns_cdf.clone()
         } else {
             let their_matrix =
-                search2::MarkovMatrix::from_optimal_policy(self.their_dice, self.target_score);
+                MarkovMatrix::from_optimal_policy(self.their_dice, self.target_score);
             their_matrix.turns_to_win_cdf(self.max_num_turns)
         };
 
@@ -360,7 +359,7 @@ impl Command for TurnsCdfCommand {
         // For the typical setup (target=4000, our dice=6 normal, their dice=6
         // normal), this is ≈0.562. The Kelley-Criterion optimal bet is then 12.5%
         // of your total wealth.
-        let p_win = search2::p_rv1_lte_rv2(our_turns_cdf.view(), their_turns_cdf.view());
+        let p_win = p_rv1_lte_rv2(our_turns_cdf.view(), their_turns_cdf.view());
 
         let mut table = Table::new("{:>}  {:<}");
         table.add_row(row!("search_duration", format!("{:.2?}", search_duration)));
