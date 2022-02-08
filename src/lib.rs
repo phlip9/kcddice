@@ -21,7 +21,6 @@
 
 pub mod cli;
 mod dice;
-mod search;
 mod search2;
 
 use std::cmp;

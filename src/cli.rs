@@ -1,6 +1,5 @@
 use crate::{
     dice::{DiceCounts, DiceVec, DieKindCounts},
-    search::{p_rv_lte_itself, Action, Context, MarkovMatrix, NormalizedStateAction, State},
     search2, DEFAULT_TARGET_SCORE,
 };
 use pico_args::{self, Arguments};
