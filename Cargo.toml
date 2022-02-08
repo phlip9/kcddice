@@ -18,7 +18,7 @@ tinyvec = "1.5.1"
 codegen-units = 1
 lto = true
 panic = "abort"
-
+debug = 1
 
 [[bin]]
 name = "kcddice"
