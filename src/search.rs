@@ -252,6 +252,7 @@ impl NormalizedStateAction {
     }
 
     /// An pseudo initial state, before rolling the first set of dice.
+    #[allow(unused)]
     fn init_state(target_score: u16, dice_kinds: DieKindCounts) -> Self {
         Self {
             my_round_total: 0,
@@ -580,7 +581,7 @@ impl ScorePMF {
         self.0.into_iter().collect()
     }
 
-    fn into_dense(&self, target_score: u16) -> Array1<f64> {
+    fn to_dense(&self, target_score: u16) -> Array1<f64> {
         let num_states = MarkovMatrix::num_states(target_score);
 
         let mut dense_pmf = Array1::zeros(num_states);
@@ -654,9 +655,7 @@ impl MarkovMatrix {
             ctxt.set_all_dice(all_dice);
             let qstate = NormalizedStateAction::new(0, target_score - turn_score, all_dice);
 
-            let score_pmf = qstate
-                .score_distribution(&mut ctxt)
-                .into_dense(target_score);
+            let score_pmf = qstate.score_distribution(&mut ctxt).to_dense(target_score);
 
             matrix
                 .slice_mut(s![turn_score_idx.., turn_score_idx])
@@ -685,35 +684,6 @@ impl MarkovMatrix {
 
         turns_cdf
     }
-}
-
-/// Given `X_1` and `X_2` independent random variables defined by the same CDF
-/// `cdf`, returns the `Pr[X_1 <= X_2]`.
-pub fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
-    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
-    let p = 0.0;
-
-    // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
-    let c_i1 = 0.0;
-
-    let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
-        // c_i = cdf[i]
-
-        // p_1 = Pr[X_1 = x_i]
-        //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
-        //     = cdf[i] - cdf[i - 1]
-        let p_1 = c_i - c_i1;
-
-        // p_2 = Pr[X_2 >= x_i]
-        //     = 1 - Pr[X_2 < x_i]
-        //     = 1 - Pr[X_2 <= prev(x_i)]
-        //     = 1 - cdf[i - 1]
-        let p_2 = 1.0 - c_i1;
-
-        (p + (p_1 * p_2), c_i)
-    });
-
-    p
 }
 
 /// Given `X_1` and `X_2` independent random variables defined by CDFs `cdf1` and
@@ -845,6 +815,35 @@ mod test {
             ],
             actions(dice![1, 1, 2, 3, 4, 5]),
         );
+    }
+
+    /// Given `X_1` and `X_2` independent random variables defined by the same CDF
+    /// `cdf`, returns the `Pr[X_1 <= X_2]`.
+    fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
+        // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
+        let p = 0.0;
+
+        // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
+        let c_i1 = 0.0;
+
+        let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
+            // c_i = cdf[i]
+
+            // p_1 = Pr[X_1 = x_i]
+            //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
+            //     = cdf[i] - cdf[i - 1]
+            let p_1 = c_i - c_i1;
+
+            // p_2 = Pr[X_2 >= x_i]
+            //     = 1 - Pr[X_2 < x_i]
+            //     = 1 - Pr[X_2 <= prev(x_i)]
+            //     = 1 - cdf[i - 1]
+            let p_2 = 1.0 - c_i1;
+
+            (p + (p_1 * p_2), c_i)
+        });
+
+        p
     }
 
     #[test]

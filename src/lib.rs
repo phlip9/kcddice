@@ -19,6 +19,9 @@
 //! The bust probability is the probability that no scoring dice are rolled in
 //! the next turn, assuming the player choose the given action.
 
+#[macro_use]
+mod macros;
+
 pub mod cli;
 mod dice;
 mod search;

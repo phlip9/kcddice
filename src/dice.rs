@@ -9,7 +9,7 @@ use std::{
 use tinyvec::ArrayVec;
 
 // TODO(philiphayes): implement jokers/devils
-const FACE_JOKER: u8 = 0;
+// const FACE_JOKER: u8 = 0;
 
 pub struct DieDistr([f64; 8]);
 
@@ -20,11 +20,11 @@ impl DieDistr {
         ])
     }
 
-    const fn new_joker(distr: [f64; 6]) -> Self {
-        Self([
-            distr[0], 0.0, distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
-        ])
-    }
+    // const fn new_joker(distr: [f64; 6]) -> Self {
+    //     Self([
+    //         distr[0], 0.0, distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
+    //     ])
+    // }
 
     const fn p_face(&self, face: u8) -> f64 {
         self.0[face as usize]
@@ -117,7 +117,7 @@ impl DieKindCounts {
 
     pub fn validate_init_set(&self, rolled_kinds: &DieKindCounts) -> Result<(), String> {
         if self.ndice() != 6 {
-            return Err(format!("initial die kinds set must contain exactly 6 dice"));
+            return Err("initial die kinds set must contain exactly 6 dice".to_string());
         }
         if !self.is_superset_of(rolled_kinds) {
             return Err(format!(
@@ -157,10 +157,7 @@ impl DieKindCounts {
     }
 
     fn contains(&self, kind: DieKind) -> bool {
-        self.0
-            .into_iter()
-            .find(|(kind2, _)| kind2 == &kind)
-            .is_some()
+        self.0.into_iter().any(|(kind2, _)| kind2 == kind)
     }
 
     fn add_count(&mut self, kind: DieKind, nkind: u8) {
@@ -336,9 +333,9 @@ impl Die {
         Self { face, kind }
     }
 
-    fn p_die(self) -> f64 {
-        self.kind.die_distr().p_face(self.face)
-    }
+    // fn p_die(self) -> f64 {
+    //     self.kind.die_distr().p_face(self.face)
+    // }
 }
 
 impl fmt::Debug for Die {
@@ -394,12 +391,12 @@ impl DiceVec {
     //
     // }
 
-    #[inline]
-    pub fn from_die(die: Die) -> Self {
-        let mut dice = Self::new();
-        dice.0.push(die);
-        dice
-    }
+    // #[inline]
+    // pub fn from_die(die: Die) -> Self {
+    //     let mut dice = Self::new();
+    //     dice.0.push(die);
+    //     dice
+    // }
 
     #[inline]
     fn from_sorted_iter<T>(iter: T) -> Self
@@ -414,10 +411,10 @@ impl DiceVec {
         dice
     }
 
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
+    // #[inline]
+    // pub fn is_empty(&self) -> bool {
+    //     self.0.is_empty()
+    // }
 
     #[inline]
     pub fn len(&self) -> u8 {
@@ -428,19 +425,19 @@ impl DiceVec {
         is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
     }
 
-    fn get_face_count(&self, face: u8) -> u8 {
-        self.0
-            .iter()
-            .map(|die| if die.face == face { 1 } else { 0 })
-            .sum()
-    }
+    // fn get_face_count(&self, face: u8) -> u8 {
+    //     self.0
+    //         .iter()
+    //         .map(|die| if die.face == face { 1 } else { 0 })
+    //         .sum()
+    // }
 
-    fn get_die_count(&self, die: Die) -> u8 {
-        self.0
-            .iter()
-            .map(|&other| if other == die { 1 } else { 0 })
-            .sum()
-    }
+    // fn get_die_count(&self, die: Die) -> u8 {
+    //     self.0
+    //         .iter()
+    //         .map(|&other| if other == die { 1 } else { 0 })
+    //         .sum()
+    // }
 
     // #[inline]
     // fn get_die(self, idx: usize) -> Die {
@@ -478,16 +475,17 @@ impl DiceVec {
     }
 
     #[inline]
+    #[cfg(test)]
     fn truncate(&mut self, new_len: u8) {
         self.0.truncate(new_len as usize);
     }
 
-    fn remove_face(self, face: u8) -> Self {
-        let without_face =
-            Self::from_sorted_iter(self.0.into_iter().filter(|die| die.face != face));
-        debug_assert!(without_face.invariant());
-        without_face
-    }
+    // fn remove_face(self, face: u8) -> Self {
+    //     let without_face =
+    //         Self::from_sorted_iter(self.0.into_iter().filter(|die| die.face != face));
+    //     debug_assert!(without_face.invariant());
+    //     without_face
+    // }
 
     fn split_next_die(mut self) -> (Self, Self) {
         let die = self.0[0];
@@ -683,10 +681,10 @@ impl DiceCounts {
         Self(0)
     }
 
-    #[inline]
-    pub fn from_roll(roll: u8, count: u8) -> Self {
-        Self(((count as u32) & 0x7) << (4 * (roll as u32)))
-    }
+    // #[inline]
+    // pub fn from_roll(roll: u8, count: u8) -> Self {
+    //     Self(((count as u32) & 0x7) << (4 * (roll as u32)))
+    // }
 
     pub fn from_dice_vec(dice_vec: DiceVec) -> Self {
         dice_vec.into_iter().collect()
@@ -729,6 +727,7 @@ impl DiceCounts {
     }
 
     #[inline]
+    #[cfg(test)]
     pub fn set_count(&mut self, roll: u8, count: u8) {
         self.0 = (self.0 & !(0x7 << (4 * (roll as u32))))
             + (((count as u32) & 0x7) << (4 * (roll as u32)));
@@ -739,7 +738,8 @@ impl DiceCounts {
         self.0 += ((count as u32) & 0x7) << (4 * (roll as u32));
     }
 
-    pub fn add(self, other: Self) -> Self {
+    #[cfg(test)]
+    fn add(self, other: Self) -> Self {
         Self(self.0 + other.0)
     }
 
@@ -873,7 +873,8 @@ impl DiceCounts {
     /// let n = number of dice in the set
     ///     P = n! / (6^n * ∏_{i∈[1,6]} c_i!)
     ///         where c_i is the count of the i'th dice in the set
-    pub fn p_roll(self) -> f64 {
+    #[cfg(test)]
+    fn p_roll(self) -> f64 {
         let n = self.len();
 
         let prod: u32 = (1..=6)
@@ -910,12 +911,14 @@ impl DiceCounts {
         rolls
     }
 
-    pub fn all_multisets(total_dice: u8) -> AllDiceMultisetsIter {
+    #[cfg(test)]
+    fn all_multisets(total_dice: u8) -> AllDiceMultisetsIter {
         AllDiceMultisetsIter::new(total_dice)
     }
 
     /// Return all possible sub-multisets of size `ndice` of a given set of dice rolls.
-    pub fn multisets(&self, ndice: u8) -> Vec<DiceCounts> {
+    #[cfg(test)]
+    fn multisets(&self, ndice: u8) -> Vec<DiceCounts> {
         fn rec(
             cb: &mut impl FnMut(DiceCounts),
             mut acc: DiceCounts,
@@ -1037,60 +1040,62 @@ impl FromStr for DiceCounts {
     }
 }
 
-/// An `Iterator` over combinations (with replacement) of _all_ dice roll outcomes.
-pub struct AllDiceMultisetsIter {
-    /// the _next_ combination we'll output (unless we're done).
-    counts: DiceCounts,
-    /// total number of dice rolls per combination.
-    total_dice: u8,
-    /// set to `true` when we're done generating.
-    done: bool,
-}
-
-impl AllDiceMultisetsIter {
-    fn new(total_dice: u8) -> Self {
-        // initialize with our the very first combination: [1, 1, .., 1]
-        let mut counts = DiceCounts::new();
-        counts.set_count(1, total_dice);
-
-        Self {
-            counts,
-            total_dice,
-            done: false,
-        }
+cfg_test! {
+    /// An `Iterator` over combinations (with replacement) of _all_ dice roll outcomes.
+    struct AllDiceMultisetsIter {
+        /// the _next_ combination we'll output (unless we're done).
+        counts: DiceCounts,
+        /// total number of dice rolls per combination.
+        total_dice: u8,
+        /// set to `true` when we're done generating.
+        done: bool,
     }
-}
 
-impl Iterator for AllDiceMultisetsIter {
-    type Item = DiceCounts;
+    impl AllDiceMultisetsIter {
+        fn new(total_dice: u8) -> Self {
+            // initialize with our the very first combination: [1, 1, .., 1]
+            let mut counts = DiceCounts::new();
+            counts.set_count(1, total_dice);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
-        // this is the combination we're about to output
-        let current = self.counts;
-
-        // we're done when we finally reach [6, 6, .., 6]
-        if self.counts.get_count(6) == self.total_dice {
-            self.done = true;
-        } else {
-            // patch self.counts to be the _next_ combination we'll output
-            for i in 1..=5 {
-                let count_i = self.counts.get_count(i);
-                if count_i > 0 {
-                    self.counts.add_count(i + 1, 1);
-                    for j in 2..=i {
-                        self.counts.set_count(j, 0);
-                    }
-                    self.counts.set_count(1, count_i - 1);
-                    break;
-                }
+            Self {
+                counts,
+                total_dice,
+                done: false,
             }
         }
+    }
 
-        Some(current)
+    impl Iterator for AllDiceMultisetsIter {
+        type Item = DiceCounts;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.done {
+                return None;
+            }
+
+            // this is the combination we're about to output
+            let current = self.counts;
+
+            // we're done when we finally reach [6, 6, .., 6]
+            if self.counts.get_count(6) == self.total_dice {
+                self.done = true;
+            } else {
+                // patch self.counts to be the _next_ combination we'll output
+                for i in 1..=5 {
+                    let count_i = self.counts.get_count(i);
+                    if count_i > 0 {
+                        self.counts.add_count(i + 1, 1);
+                        for j in 2..=i {
+                            self.counts.set_count(j, 0);
+                        }
+                        self.counts.set_count(1, count_i - 1);
+                        break;
+                    }
+                }
+            }
+
+            Some(current)
+        }
     }
 }
 
@@ -1103,8 +1108,7 @@ mod test {
     use super::*;
     use crate::num_combinations;
     use approx::assert_relative_eq;
-    use claim::{assert_err, assert_gt, assert_lt};
-    use itertools::Itertools;
+    use claim::assert_err;
     use std::collections::HashSet;
 
     macro_rules! dice {
@@ -1221,7 +1225,7 @@ mod test {
         assert_eq!(kind_counts.num_multisets(6) as usize, combs.len());
 
         // no duplicates
-        let combs_set = HashSet::<DiceVec>::from_iter(combs.clone().into_iter());
+        let combs_set = HashSet::<DiceVec>::from_iter(combs.into_iter());
         assert_eq!(kind_counts.num_multisets(6) as usize, combs_set.len());
     }
 

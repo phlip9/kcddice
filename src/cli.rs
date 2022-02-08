@@ -1,8 +1,6 @@
 use crate::{
-    dice::{DiceCounts, DiceVec, DieKindCounts},
-    search::{
-        p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, ScorePMF, State,
-    },
+    dice::{DiceVec, DieKindCounts},
+    search::{p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, State},
     DEFAULT_TARGET_SCORE,
 };
 use pico_args::{self, Arguments};
@@ -64,7 +62,7 @@ OPTIONS:
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
         };
 
         cmd.all_dice
@@ -181,7 +179,7 @@ USAGE:
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.dice_left)?;
@@ -251,7 +249,7 @@ impl Command for MarkovMatrixCommand {
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.all_dice)?;
@@ -295,11 +293,11 @@ impl Command for TurnsCdfCommand {
             our_dice: args
                 .opt_value_from_str(["--our-die-kinds", "-o"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
             their_dice: args
                 .opt_value_from_str(["--their-die-kinds", "-t"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or(DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
         };
 
         cmd.our_dice.validate_init_set(&cmd.our_dice)?;
