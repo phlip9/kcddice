@@ -1,9 +1,9 @@
 use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets};
 use approx::relative_eq;
 use std::{
-    cmp::{self, min},
-    fmt,
-    ops::AddAssign,
+    cmp, fmt,
+    iter::FusedIterator,
+    ops::{AddAssign, Range},
     str::FromStr,
 };
 use tinyvec::ArrayVec;
@@ -231,18 +231,15 @@ impl DieKindCounts {
             // choose how many times we'll repeat this face
             for nface in (0..=ndice).rev() {
                 // generate `spread_dice multichoose nface` for this iteration
-                spread_dice.multisets_cb(
-                    &mut |multiset| {
-                        let mut new_acc = acc;
-                        new_acc.extend(multiset);
+                for mset in spread_dice.multisets_iter(nface) {
+                    let mut new_acc = acc;
+                    new_acc.extend(mset);
 
-                        let mut new_kind_counts = kind_counts;
-                        new_kind_counts.sub_counts(DieKindCounts::from_dice_vec(multiset));
+                    let mut new_kind_counts = kind_counts;
+                    new_kind_counts.sub_counts(DieKindCounts::from_dice_vec(mset));
 
-                        rec(cb, new_acc, new_kind_counts, current_face + 1);
-                    },
-                    nface,
-                );
+                    rec(cb, new_acc, new_kind_counts, current_face + 1);
+                }
             }
         }
 
@@ -470,6 +467,7 @@ impl DiceVec {
         debug_assert!(self.invariant());
     }
 
+    #[cfg(test)]
     fn merge(&self, other: &Self) -> Self {
         Self::from_sorted_iter(itertools::merge(self.into_iter(), other.into_iter()))
     }
@@ -487,6 +485,7 @@ impl DiceVec {
     //     without_face
     // }
 
+    #[cfg(test)]
     fn split_next_die(mut self) -> (Self, Self) {
         let die = self.0[0];
         let split_idx = self.0.partition_point(|&other| other == die);
@@ -495,6 +494,7 @@ impl DiceVec {
     }
 
     /// Only return unique dice.
+    #[cfg(test)]
     fn unique_dice(&self) -> Self {
         let (_prev, unique) = self.into_iter().fold(
             (Die::default(), DiceVec::new()),
@@ -556,62 +556,32 @@ impl DiceVec {
             .product()
     }
 
-    fn multisets_cb(&self, cb: &mut impl FnMut(DiceVec), ndice: u8) {
-        fn rec(cb: &mut impl FnMut(DiceVec), acc: DiceVec, left: DiceVec, ndice: u8) {
-            // time to return the accumulator
-            if ndice == 0 {
-                cb(acc);
-                return;
-            }
-
-            // if ndice == 1 we can just return each unique element
-            if ndice == 1 {
-                for die in left.unique_dice() {
-                    let mut new_acc = acc;
-                    new_acc.push_die(die);
-                    cb(new_acc);
-                }
-                return;
-            }
-
-            let elts_left = left.len();
-
-            // special case: |S| = n means just one possible combination: S
-            if elts_left == ndice {
-                cb(acc.merge(&left));
-                return;
-            }
-
-            // will never have enough; skip
-            if elts_left < ndice {
-                return;
-            }
-
-            // take next set of identical dice
-            let (die_set, left) = left.split_next_die();
-            let die = die_set.0[0];
-            let count = die_set.len();
-
-            for to_add in (0..=min(count, ndice)).rev() {
-                let mut new_acc = acc;
-                new_acc.push_n_die(die, to_add);
-                rec(cb, new_acc, left, ndice - to_add);
-            }
-        }
-
-        rec(cb, DiceVec::new(), *self, ndice);
+    pub fn multisets_iter(self, ndice: u8) -> DiceVecMultisetsIter {
+        DiceVecMultisetsIter::new(self, ndice)
     }
 
-    pub fn multisets(&self, ndice: u8) -> Vec<DiceVec> {
-        let mut out = Vec::new();
-        self.multisets_cb(&mut |dice| out.push(dice), ndice);
-        out
+    #[inline]
+    fn copy_slice(&self, range: Range<u8>) -> Self {
+        let start = range.start as usize;
+        let end = range.end as usize;
+        let len = end - start;
+
+        let mut arr = ArrayVec::new();
+        arr.grab_spare_slice_mut()[0..len].copy_from_slice(&self.0[start..end]);
+        arr.set_len(len);
+
+        let new = Self(arr);
+        debug_assert!(new.invariant());
+
+        new
     }
 }
 
 impl fmt::Debug for DiceVec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.into_iter()).finish()
+        use itertools::Itertools;
+        let pieces = self.into_iter().map(|die| format!("{:?}", die)).join(", ");
+        write!(f, "[{}]", pieces)
     }
 }
 
@@ -661,6 +631,92 @@ impl FromStr for DiceVec {
         Ok(dice)
     }
 }
+
+/// An `Iterator` over all k-combinations of the multiset defined by a given
+/// `DiceVec`.
+pub struct DiceVecMultisetsIter {
+    /// The complete multiset we're selecting from.
+    mset: DiceVec,
+    /// The last k-combination we'll output.
+    last: DiceVec,
+    /// The current k-combination we're about to output.
+    comb: DiceVec,
+    /// Every combination will have `.len() == k`
+    k: u8,
+    /// `true` if we've output all combinations and have nothing more to do.
+    done: bool,
+}
+
+impl DiceVecMultisetsIter {
+    fn new(mset: DiceVec, k: u8) -> Self {
+        let n = mset.len();
+        assert!(k <= n);
+
+        Self {
+            mset,
+            last: mset.copy_slice((n - k)..n),
+            comb: mset.copy_slice(0..k),
+            k,
+            done: false,
+        }
+    }
+
+    fn update_to_next_combination(&mut self) {
+        // find the rightmost element in `comb` that is less than the "max" value
+        // it can have (which is the same as the element in the final combination
+        // at the same index)
+        let maybe_next_idx = self
+            .comb
+            .0
+            .iter()
+            .zip(self.last.0.iter())
+            .rposition(|(x, l)| x < l);
+
+        // if comb == last, then there will be no rightmost element less than the
+        // max, so we return None to show that we're done.
+        let (i, x) = match maybe_next_idx {
+            Some(i) => (i, self.comb.0[i]),
+            None => {
+                // comb == last => done!
+                self.done = true;
+                return;
+            }
+        };
+
+        // find the successor element (the next element in the multiset greater
+        // than arr[i])
+        let maybe_succ_idx = self.mset.0.iter().position(|y| &x < y);
+
+        let j = match maybe_succ_idx {
+            Some(j) => j,
+            // since we've already checked we're not at the end, it cannot happen
+            // that there is no successor.
+            None => unreachable!(),
+        };
+
+        // replaces comb[i] with its successor and the remainder with all elements
+        // that follow in mset.
+        let k = self.k as usize;
+        self.comb.0[i..k].copy_from_slice(&self.mset.0[j..(j + (k - i))]);
+        debug_assert!(self.comb.invariant());
+    }
+}
+
+impl Iterator for DiceVecMultisetsIter {
+    type Item = DiceVec;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            None
+        } else {
+            let comb = self.comb;
+            self.update_to_next_combination();
+            Some(comb)
+        }
+    }
+}
+
+impl FusedIterator for DiceVecMultisetsIter {}
 
 /// A compressed representation of a set of dice, stored as counts of each die
 /// packed into a u32. Visually,
@@ -964,7 +1020,7 @@ impl DiceCounts {
             left.set_count(roll, 0);
 
             // add zero or more of this element
-            for to_add in (0..=min(count, ndice)).rev() {
+            for to_add in (0..=cmp::min(count, ndice)).rev() {
                 acc.set_count(roll, to_add);
                 rec(cb, acc, left, ndice - to_add);
             }
@@ -1109,7 +1165,7 @@ mod test {
     use crate::num_combinations;
     use approx::assert_relative_eq;
     use claim::assert_err;
-    use std::collections::HashSet;
+    use std::{cmp::min, collections::HashSet};
 
     macro_rules! dice {
         () => {
@@ -1143,6 +1199,55 @@ mod test {
         let mut out = Vec::new();
         rec(&mut |counts| out.push(counts), DiceCounts::new(), 1, ndice);
         out.sort_unstable();
+        out
+    }
+
+    #[allow(unused)]
+    fn dice_vec_multisets_ref(mset: DiceVec, ndice: u8) -> Vec<DiceVec> {
+        fn rec(cb: &mut impl FnMut(DiceVec), acc: DiceVec, left: DiceVec, ndice: u8) {
+            // time to return the accumulator
+            if ndice == 0 {
+                cb(acc);
+                return;
+            }
+
+            // if ndice == 1 we can just return each unique element
+            if ndice == 1 {
+                for die in left.unique_dice() {
+                    let mut new_acc = acc;
+                    new_acc.push_die(die);
+                    cb(new_acc);
+                }
+                return;
+            }
+
+            let elts_left = left.len();
+
+            // special case: |S| = n means just one possible combination: S
+            if elts_left == ndice {
+                cb(acc.merge(&left));
+                return;
+            }
+
+            // will never have enough; skip
+            if elts_left < ndice {
+                return;
+            }
+
+            // take next set of identical dice
+            let (die_set, left) = left.split_next_die();
+            let die = die_set.0[0];
+            let count = die_set.len();
+
+            for to_add in (0..=min(count, ndice)).rev() {
+                let mut new_acc = acc;
+                new_acc.push_n_die(die, to_add);
+                rec(cb, new_acc, left, ndice - to_add);
+            }
+        }
+
+        let mut out = Vec::new();
+        rec(&mut |dice| out.push(dice), DiceVec::new(), mset, ndice);
         out
     }
 
@@ -1297,14 +1402,18 @@ mod test {
 
     #[test]
     fn test_dice_vec_multisets() {
-        assert_eq!(vec![dice![]], dice![1, 1, 1, 2hk, 2hk, 3o].multisets(0));
+        use itertools::Itertools;
+        assert_eq!(
+            vec![dice![]],
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(0).collect_vec(),
+        );
         assert_eq!(
             vec![dice![1], dice![2hk], dice![3o]],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(1)
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(1).collect_vec(),
         );
         assert_eq!(
             vec![dice![1], dice![1hk], dice![1o]],
-            dice![1, 1, 1, 1hk, 1hk, 1o].multisets(1)
+            dice![1, 1, 1, 1hk, 1hk, 1o].multisets_iter(1).collect_vec(),
         );
         assert_eq!(
             vec![
@@ -1314,7 +1423,7 @@ mod test {
                 dice![2hk, 2hk],
                 dice![2hk, 3o]
             ],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(2)
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(2).collect_vec(),
         );
         assert_eq!(
             vec![
@@ -1325,11 +1434,50 @@ mod test {
                 dice![1, 2hk, 3o],
                 dice![2hk, 2hk, 3o],
             ],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(3)
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(3).collect_vec(),
         );
         assert_eq!(
             vec![dice![1, 1, 1, 2hk, 2hk, 3o]],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets(6)
+            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(6).collect_vec(),
+        );
+
+        assert_eq!(
+            vec![
+                dice![1, 1hk],
+                dice![1, 2],
+                dice![1, 2hk],
+                dice![1, 3],
+                dice![1, 3hk],
+                dice![1hk, 2],
+                dice![1hk, 2hk],
+                dice![1hk, 3],
+                dice![1hk, 3hk],
+                dice![2, 2hk],
+                dice![2, 3],
+                dice![2, 3hk],
+                dice![2hk, 3],
+                dice![2hk, 3hk],
+                dice![3, 3hk],
+            ],
+            dice![1, 1hk, 2, 2hk, 3, 3hk]
+                .multisets_iter(2)
+                .collect_vec(),
+        );
+
+        assert_eq!(
+            vec![dice![1, 1], dice![1, 1o], dice![1o, 1o]],
+            dice![1, 1, 1o, 1o, 1o, 1o].multisets_iter(2).collect_vec(),
+        );
+
+        assert_eq!(
+            vec![
+                dice![1, 1, 2, 2],
+                dice![1, 1, 2, 3],
+                dice![1, 2, 2, 2],
+                dice![1, 2, 2, 3],
+                dice![2, 2, 2, 3],
+            ],
+            dice![1, 1, 2, 2, 2, 3].multisets_iter(4).collect_vec(),
         );
 
         // when all the elements are unique, this is just the normal set
@@ -1337,7 +1485,7 @@ mod test {
         for k in 0..=6 {
             assert_eq!(
                 num_combinations(6, k as u32) as usize,
-                dice![1, 1hk, 1o, 2, 2hk, 2o].multisets(k).len(),
+                dice![1, 1hk, 1o, 2, 2hk, 2o].multisets_iter(k).count(),
             );
         }
     }
