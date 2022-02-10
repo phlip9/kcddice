@@ -8,6 +8,12 @@ use std::{
 };
 use tinyvec::ArrayVec;
 
+#[cfg(test)]
+use proptest::{
+    arbitrary::Arbitrary,
+    strategy::{BoxedStrategy, Strategy},
+};
+
 // TODO(philiphayes): implement jokers/devils
 // const FACE_JOKER: u8 = 0;
 
@@ -509,6 +515,7 @@ impl DiceVec {
         unique
     }
 
+    #[inline]
     pub fn into_die_kind_counts(self) -> DieKindCounts {
         DieKindCounts::from_dice_vec(self)
     }
@@ -534,14 +541,22 @@ impl DiceVec {
             .map(move |kind| (kind, self.die_with_kind(kind)))
     }
 
+    #[inline]
     pub fn score(&self) -> u16 {
         DiceCounts::from_dice_vec(*self).score()
     }
 
+    #[inline]
     pub fn exact_score(&self) -> u16 {
         DiceCounts::from_dice_vec(*self).exact_score()
     }
 
+    #[inline]
+    pub fn is_valid_hold(&self) -> bool {
+        DiceCounts::from_dice_vec(*self).is_valid_hold()
+    }
+
+    #[inline]
     pub fn is_bust(&self) -> bool {
         DiceCounts::from_dice_vec(*self).is_bust()
     }
@@ -556,6 +571,7 @@ impl DiceVec {
             .product()
     }
 
+    #[inline]
     pub fn multisets_iter(self, ndice: u8) -> DiceVecMultisetsIter {
         DiceVecMultisetsIter::new(self, ndice)
     }
@@ -733,14 +749,24 @@ pub struct DiceCounts(pub u32);
 impl DiceCounts {
     /// A new empty set of dice rolls.
     #[inline]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self(0)
     }
 
     // #[inline]
-    // pub fn from_roll(roll: u8, count: u8) -> Self {
+    // const fn from_roll_count(roll: u8, count: u8) -> Self {
     //     Self(((count as u32) & 0x7) << (4 * (roll as u32)))
     // }
+
+    #[inline]
+    const fn from_counts(cs: [u8; 6]) -> Self {
+        Self(u32::from_le_bytes([
+            cs[0] << 4,
+            cs[1] | (cs[2] << 4),
+            cs[3] | (cs[4] << 4),
+            cs[5],
+        ]))
+    }
 
     pub fn from_dice_vec(dice_vec: DiceVec) -> Self {
         dice_vec.into_iter().collect()
@@ -779,7 +805,7 @@ impl DiceCounts {
 
     #[inline]
     pub fn get_count(self, roll: u8) -> u8 {
-        ((self.0 >> (4 * (roll as u32))) & 0xf) as u8
+        ((self.0 >> (4 * (roll as u32))) & 0x7) as u8
     }
 
     #[inline]
@@ -795,7 +821,8 @@ impl DiceCounts {
     }
 
     #[cfg(test)]
-    fn add(self, other: Self) -> Self {
+    #[inline]
+    const fn add(self, other: Self) -> Self {
         Self(self.0 + other.0)
     }
 
@@ -859,31 +886,18 @@ impl DiceCounts {
             return 0;
         }
 
-        let c1 = self.get_count(1);
-        let c2 = self.get_count(2);
-        let c3 = self.get_count(3);
-        let c4 = self.get_count(4);
-        let c5 = self.get_count(5);
-        let c6 = self.get_count(6);
-
         // check for pure straights and straights with 1 added scoring dice
-        // [1 1 1 1 1 1]
-        if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 1 {
+        if self == Self::from_counts([1, 1, 1, 1, 1, 1]) {
             return 1500;
-        // [0 1 1 1 1 1]
-        } else if c1 == 0 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 1 {
+        } else if self == Self::from_counts([0, 1, 1, 1, 1, 1]) {
             return 750;
-        // [0 1 1 1 2 1]
-        } else if c1 == 0 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 2 && c6 == 1 {
+        } else if self == Self::from_counts([0, 1, 1, 1, 2, 1]) {
             return 750 + 50;
-        // [1 1 1 1 1 0]
-        } else if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 0 {
+        } else if self == Self::from_counts([1, 1, 1, 1, 1, 0]) {
             return 500;
-        // [2 1 1 1 1 0]
-        } else if c1 == 2 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 1 && c6 == 0 {
+        } else if self == Self::from_counts([2, 1, 1, 1, 1, 0]) {
             return 500 + 100;
-        // [1 1 1 1 2 0]
-        } else if c1 == 1 && c2 == 1 && c3 == 1 && c4 == 1 && c5 == 2 && c6 == 0 {
+        } else if self == Self::from_counts([1, 1, 1, 1, 2, 0]) {
             return 500 + 50;
         }
 
@@ -915,6 +929,36 @@ impl DiceCounts {
         }
 
         score
+    }
+
+    pub fn is_valid_hold(self) -> bool {
+        // spurious clippy lint...
+        #[allow(clippy::if_same_then_else)]
+        if self.is_empty() {
+            false
+        } else if self == Self::from_counts([1, 1, 1, 1, 1, 1]) {
+            true
+        } else if self == Self::from_counts([0, 1, 1, 1, 1, 1]) {
+            true
+        } else if self == Self::from_counts([0, 1, 1, 1, 2, 1]) {
+            true
+        } else if self == Self::from_counts([1, 1, 1, 1, 1, 0]) {
+            true
+        } else if self == Self::from_counts([2, 1, 1, 1, 1, 0]) {
+            true
+        } else if self == Self::from_counts([1, 1, 1, 1, 2, 0]) {
+            true
+        } else {
+            let c2 = self.get_count(2);
+            let c3 = self.get_count(3);
+            let c4 = self.get_count(4);
+            let c6 = self.get_count(6);
+
+            (c2 != 1 && c2 != 2)
+                && (c3 != 1 && c3 != 2)
+                && (c4 != 1 && c4 != 2)
+                && (c6 != 1 && c6 != 2)
+        }
     }
 
     /// Return true if this set has no scoring dice, also called a "bust".
@@ -1056,6 +1100,7 @@ impl cmp::PartialOrd for DiceCounts {
 }
 
 impl FromIterator<Die> for DiceCounts {
+    #[inline]
     fn from_iter<T>(iter: T) -> Self
     where
         T: IntoIterator<Item = Die>,
@@ -1065,6 +1110,28 @@ impl FromIterator<Die> for DiceCounts {
             counts.add_count(die.face, 1);
         }
         counts
+    }
+}
+
+#[cfg(test)]
+#[rustfmt::skip]
+impl Arbitrary for DiceCounts {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<DiceCounts>;
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        static ROLLS_SET: [u8; 36] = [
+            1, 1, 1, 1, 1, 1,
+            2, 2, 2, 2, 2, 2,
+            3, 3, 3, 3, 3, 3,
+            4, 4, 4, 4, 4, 4,
+            5, 5, 5, 5, 5, 5,
+            6, 6, 6, 6, 6, 6,
+        ];
+
+        proptest::sample::subsequence(ROLLS_SET.as_ref(), 0..=6)
+            .prop_map(|rolls| DiceCounts::from_rolls(&rolls))
+            .boxed()
     }
 }
 
@@ -1165,6 +1232,7 @@ mod test {
     use crate::num_combinations;
     use approx::assert_relative_eq;
     use claim::assert_err;
+    use proptest::prelude::*;
     use std::{cmp::min, collections::HashSet};
 
     macro_rules! dice {
@@ -1266,6 +1334,15 @@ mod test {
         assert_eq!(3200, DiceCounts::from_rolls(&[4, 4, 4, 4, 4, 4]).score());
     }
 
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[test]
+        fn test_prop_dice_counts_is_valid_hold(counts in any::<DiceCounts>()) {
+            assert_eq!(counts.exact_score() > 0, counts.is_valid_hold());
+        }
+    }
+
     #[test]
     fn test_dice_counts_from_rolls() {
         assert!(DiceCounts::from_rolls(&[]).is_empty());
@@ -1281,6 +1358,25 @@ mod test {
         assert_eq!(6, DiceCounts::from_rolls(&[3, 3, 3, 3, 3, 3]).get_count(3));
         assert_eq!(6, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(6));
         assert_eq!(0, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(3));
+    }
+
+    #[test]
+    fn test_dice_counts_from_counts() {
+        assert!(DiceCounts::from_counts([0; 6]).is_empty());
+
+        assert_eq!(
+            DiceCounts::from_counts([1; 6]),
+            DiceCounts::from_rolls(&[1, 2, 3, 4, 5, 6]),
+        );
+
+        assert_eq!(
+            DiceCounts::from_counts([1, 0, 1, 0, 1, 0]),
+            DiceCounts::from_rolls(&[1, 3, 5]),
+        );
+        assert_eq!(
+            DiceCounts::from_counts([1, 2, 0, 3, 0, 0]),
+            DiceCounts::from_rolls(&[1, 2, 2, 4, 4, 4]),
+        );
     }
 
     #[test]

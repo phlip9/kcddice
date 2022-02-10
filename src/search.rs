@@ -475,8 +475,13 @@ impl State {
         // for now just do the dumb thing and try all possible non-bust holds
         let possible_holds = (1..=max_num_holds)
             .flat_map(|ndice| self.rolled_dice.multisets_iter(ndice))
-            .filter(|held_dice| held_dice.exact_score() > 0)
-            .map(Action::Roll)
+            .filter_map(|held_dice| {
+                if held_dice.is_valid_hold() {
+                    Some(Action::Roll(held_dice))
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>();
 
         let mut actions_vec = possible_holds;

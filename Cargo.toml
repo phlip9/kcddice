@@ -14,6 +14,9 @@ pico-args = "0.4.2"
 tabular = "0.2.0"
 tinyvec = { version = "1.5.1", features = ["grab_spare_slice"] }
 
+[dev-dependencies]
+proptest = "1.0.0"
+
 [profile.release]
 codegen-units = 1
 lto = true
