@@ -2,6 +2,7 @@ use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets, u32_any_n
 use approx::relative_eq;
 use std::{
     cmp, fmt,
+    hash::{Hash, Hasher},
     iter::FusedIterator,
     ops::{AddAssign, Range},
     str::FromStr,
@@ -40,6 +41,7 @@ impl DieDistr {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DieKind {
+    SENTINEL = 0,
     Standard,
     HeavenlyKingdomDie,
     OddDie,
@@ -47,8 +49,9 @@ pub enum DieKind {
 }
 
 impl Default for DieKind {
+    #[inline]
     fn default() -> Self {
-        Self::Standard
+        Self::SENTINEL
     }
 }
 
@@ -65,6 +68,7 @@ impl DieKind {
 
     fn as_memnonic(self) -> &'static str {
         match self {
+            Self::SENTINEL => panic!("SENTINEL"),
             Self::Standard => "",
             Self::HeavenlyKingdomDie => "hk",
             Self::OddDie => "o",
@@ -77,6 +81,7 @@ impl DieKind {
         // and 5 (the best rolls) to make everything add up : )
 
         match self {
+            Self::SENTINEL => panic!("SENTINEL"),
             Self::Standard => DieDistr::new([1.0 / 6.0; 6]),
             Self::HeavenlyKingdomDie => DieDistr::new([0.368, 0.105, 0.105, 0.105, 0.105, 0.212]),
             Self::OddDie => DieDistr::new([
@@ -325,10 +330,20 @@ impl FromStr for DieKindCounts {
     }
 }
 
-#[derive(Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Eq)]
 pub struct Die {
     face: u8,
     kind: DieKind,
+}
+
+impl Default for Die {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            face: 0,
+            kind: DieKind::SENTINEL,
+        }
+    }
 }
 
 impl Die {
@@ -336,9 +351,62 @@ impl Die {
         Self { face, kind }
     }
 
+    #[inline]
+    fn as_u16(self) -> u16 {
+        (self.kind as u16) | ((self.face as u16) << 8)
+    }
+
     // fn p_die(self) -> f64 {
     //     self.kind.die_distr().p_face(self.face)
     // }
+}
+
+impl cmp::PartialEq for Die {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_u16().eq(&other.as_u16())
+    }
+    #[inline]
+    fn ne(&self, other: &Self) -> bool {
+        self.as_u16().ne(&other.as_u16())
+    }
+}
+
+impl cmp::PartialOrd for Die {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.as_u16().partial_cmp(&other.as_u16())
+    }
+    #[inline]
+    fn lt(&self, other: &Self) -> bool {
+        self.as_u16() < other.as_u16()
+    }
+    #[inline]
+    fn le(&self, other: &Self) -> bool {
+        self.as_u16() <= other.as_u16()
+    }
+    #[inline]
+    fn gt(&self, other: &Self) -> bool {
+        self.as_u16() > other.as_u16()
+    }
+    #[inline]
+    fn ge(&self, other: &Self) -> bool {
+        self.as_u16() >= other.as_u16()
+    }
+}
+
+impl cmp::Ord for Die {
+    #[inline]
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.as_u16().cmp(&other.as_u16())
+    }
+}
+
+impl Hash for Die {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u16(self.as_u16())
+    }
 }
 
 impl fmt::Debug for Die {
@@ -381,6 +449,7 @@ impl FromStr for Die {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DiceVec(ArrayVec<[Die; 6]>);
+// pub struct DiceVec([Die; 6]);
 
 impl DiceVec {
     /// A new empty list of dice.
