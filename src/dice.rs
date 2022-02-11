@@ -1,4 +1,4 @@
-use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets};
+use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets, u32_any_nibs_between};
 use approx::relative_eq;
 use std::{
     cmp, fmt,
@@ -949,15 +949,9 @@ impl DiceCounts {
         } else if self == Self::from_counts([1, 1, 1, 1, 2, 0]) {
             true
         } else {
-            let c2 = self.get_count(2);
-            let c3 = self.get_count(3);
-            let c4 = self.get_count(4);
-            let c6 = self.get_count(6);
-
-            (c2 != 1 && c2 != 2)
-                && (c3 != 1 && c3 != 2)
-                && (c4 != 1 && c4 != 2)
-                && (c6 != 1 && c6 != 2)
+            // do we have less than 3 (and greater than 0) of any non-scoring
+            // dice (2, 3, 4, or 6)? then this is not a valid hold.
+            !u32_any_nibs_between(self.0, 0x0101_1100, 0, 3)
         }
     }
 

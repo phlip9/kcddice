@@ -135,6 +135,35 @@ where
     true
 }
 
+///////////////
+// Bit Hacks //
+///////////////
+
+/// Returns `true` if `x` has _any_ nibbles `nb` in the range `m < nb < n`. The
+/// nibbles considered are selected according to `mask`, where `mask` has a `1`
+/// in each selectable nibble.
+///
+/// For example, calling this with `mask = 0x0010_1101` will only look at the
+/// 1st, 3rd, 4th, and 6th nibbles. Calling with `mask = 0x1111_1111` will look
+/// at all nibbles. Technically you can also look at "unaligned" nibbles too :)
+///
+/// See [`u32_any_nibs_between_ref`] for a human-readable implementation.
+#[inline]
+pub(crate) fn u32_any_nibs_between(x: u32, mask: u32, m: u32, n: u32) -> bool {
+    debug_assert!((0..=7).contains(&m));
+    debug_assert!((0..=8).contains(&n));
+
+    let a = mask * 7;
+    let b = mask * 8;
+    let w = mask * (7 + n);
+    let t = mask * (7 - m);
+
+    let u = x & a;
+    let z = (w - u) & (!x) & (u + t) & b;
+
+    z != 0
+}
+
 ///////////
 // Tests //
 ///////////
@@ -142,6 +171,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use proptest::prelude::*;
 
     fn factorial_ref(n: u32) -> u32 {
         (1..=n).product()
@@ -152,5 +182,71 @@ mod test {
         for n in 0..NUM_FACTORIALS as u32 {
             assert_eq!(factorial_ref(n), factorial(n));
         }
+    }
+
+    /// spread `x` into an array of nibbles.
+    fn u32_into_nib_le(x: u32) -> [u8; 8] {
+        let [b0, b1, b2, b3] = x.to_le_bytes();
+        [
+            b0 & 0x0f,
+            (b0 >> 4) & 0x0f,
+            b1 & 0x0f,
+            (b1 >> 4) & 0x0f,
+            b2 & 0x0f,
+            (b2 >> 4) & 0x0f,
+            b3 & 0x0f,
+            (b3 >> 4) & 0x0f,
+        ]
+    }
+
+    /// reference implementation of [`u32_any_nibs_between`]
+    fn u32_any_nibs_between_ref(x: u32, mask: u32, m: u32, n: u32) -> bool {
+        assert!((0..=7).contains(&m));
+        assert!((0..=8).contains(&n));
+
+        let m = m as u8;
+        let n = n as u8;
+
+        u32_into_nib_le(x)
+            .into_iter()
+            .zip(u32_into_nib_le(mask).into_iter())
+            .any(|(nb_x, nb_mask)| (nb_mask == 0x1) && (m < nb_x) && (nb_x < n))
+    }
+
+    // reference implementation of [`std::arch::x86::bmi::_pdep32`] so I don't
+    // need to gate tests.
+    fn pdep32_fallback(src: u32, mut mask: u32) -> u32 {
+        // iterate bit from lsb -> msb
+        let mut bit = 1;
+        let mut r = 0;
+        while mask != 0 {
+            if src & bit != 0 {
+                // add the lsb from mask to r
+                r |= mask & mask.wrapping_neg();
+            }
+            // clear lsb
+            mask &= mask - 1;
+            bit = bit << 1;
+        }
+        r
+    }
+
+    // Efficiently generate combinations of mask bits that match a "`meta_mask`"
+    // (by match I mean `meta_mask & mask == mask`).
+    fn arb_mask(meta_mask: u32) -> impl Strategy<Value = u32> {
+        let nmasks: u32 = 1 << meta_mask.count_ones();
+
+        (0..=nmasks).prop_map(move |mask_idx| pdep32_fallback(mask_idx, meta_mask))
+    }
+
+    #[test]
+    fn test_u32_any_nibs_between() {
+        assert!(u32_any_nibs_between(0x1234_5678, 0x1010_1010, 0, 3));
+        assert!(!u32_any_nibs_between(0x1234_5678, 0x0011_1011, 0, 3));
+
+        let cfg = ProptestConfig::with_cases(5000);
+        proptest!(cfg, |(x in any::<u32>(), mask in arb_mask(0x1111_1111), m in (0u32..=7), n in (0u32..=8))| {
+            assert_eq!(u32_any_nibs_between_ref(x, mask, m, n), u32_any_nibs_between(x, mask, m, n));
+        });
     }
 }
