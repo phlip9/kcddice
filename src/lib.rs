@@ -23,6 +23,7 @@
 mod macros;
 
 pub mod cli;
+mod multiset;
 mod dice;
 mod search;
 
@@ -250,7 +251,7 @@ mod test {
             }
             // clear lsb
             mask &= mask - 1;
-            bit = bit << 1;
+            bit <<= 1;
         }
         r
     }
