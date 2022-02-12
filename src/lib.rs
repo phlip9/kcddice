@@ -164,6 +164,30 @@ pub(crate) fn u32_any_nibs_between(x: u32, mask: u32, m: u32, n: u32) -> bool {
     z != 0
 }
 
+/// Sum all nibbles in `x`.
+#[inline]
+pub(crate) fn u32_sum_all_nibs(x: u32) -> u32 {
+    // a mask that selects the lo nibble in each byte.
+    const NIBS_0246: u32 = 0x0f0f_0f0f;
+
+    // horizontal sum hi and lo nibbles in each byte, placing in the lo nibble.
+    let y = (x & NIBS_0246) + ((x >> 4) & NIBS_0246);
+
+    // if y = [y0, y1, y2, y3] bytes and each byte b is in the range 0 <= b < 64,
+    // then multiplying by 0x0101_0101 will yield
+    // z = [y0, y0 + y1, y0 + y1 + y2, y0 + y1 + y2 + y3] without any overflows.
+    //
+    // since each byte in y is the sum of two nibbles nb where 0 <= nb < 16, it
+    // follows that 0 <= b = nb_lo + nb_hi < 32 < 64, so we won't have any
+    // overflows.
+    let z = y.wrapping_mul(0x0101_0101);
+
+    // select the last byte in z, which contains our desired sum:
+    // z3 = y0 + y1 + y2 + y3
+    //    = (nb0 + nb1) + (nb2 + nb3) + (nb4 + nb5) + (nb6 + nb7)
+    z >> 24
+}
+
 ///////////
 // Tests //
 ///////////
@@ -247,6 +271,19 @@ mod test {
         let cfg = ProptestConfig::with_cases(5000);
         proptest!(cfg, |(x in any::<u32>(), mask in arb_mask(0x1111_1111), m in (0u32..=7), n in (0u32..=8))| {
             assert_eq!(u32_any_nibs_between_ref(x, mask, m, n), u32_any_nibs_between(x, mask, m, n));
+        });
+    }
+
+    fn u32_sum_all_nibs_ref(x: u32) -> u32 {
+        u32_into_nib_le(x).into_iter().map(|x| x as u32).sum()
+    }
+
+    #[test]
+    fn test_u32_sum_all_nibs() {
+        let cfg = ProptestConfig::with_cases(5000);
+        proptest!(cfg, |(x in any::<u32>())| {
+            prop_assert_eq!(u32_sum_all_nibs_ref(x), u32_sum_all_nibs(x));
+ 
         });
     }
 }
