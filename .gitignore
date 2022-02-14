@@ -3,3 +3,7 @@
 perf.data
 perf.data.old
 perf.data.perf
+
+__pycache__
+
+proptest-regressions

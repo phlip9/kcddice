@@ -1,10 +1,13 @@
-use crate::{factorial, is_sorted_by, is_total_order_by, num_multisets, u32_any_nibs_between};
+use crate::{
+    factorial, is_sorted_by, is_total_order_by, multiset::MultisetU4x8, num_multisets,
+    u32_any_nibs_between,
+};
 use approx::relative_eq;
 use std::{
     cmp, fmt,
     hash::{Hash, Hasher},
     iter::FusedIterator,
-    ops::{AddAssign, Range},
+    ops::Range,
     str::FromStr,
 };
 use tinyvec::ArrayVec;
@@ -40,6 +43,7 @@ impl DieDistr {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum DieKind {
     SENTINEL = 0,
     Standard,
@@ -56,7 +60,11 @@ impl Default for DieKind {
 }
 
 impl DieKind {
-    fn from_memnonic(s: &str) -> Option<Self> {
+    fn is_sentinel(self) -> bool {
+        self == Self::SENTINEL
+    }
+
+    pub fn from_memnonic(s: &str) -> Option<Self> {
         let kind = match s {
             "" | "s" => Self::Standard,
             "hk" => Self::HeavenlyKingdomDie,
@@ -66,7 +74,7 @@ impl DieKind {
         Some(kind)
     }
 
-    fn as_memnonic(self) -> &'static str {
+    pub fn as_memnonic(self) -> &'static str {
         match self {
             Self::SENTINEL => panic!("SENTINEL"),
             Self::Standard => "",
@@ -102,118 +110,107 @@ impl fmt::Display for DieKind {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DieKindCounts(ArrayVec<[(DieKind, u8); 6]>);
+#[derive(Copy, Clone, Debug)]
+pub struct DieKindTable([DieKind; 6]);
 
-impl DieKindCounts {
-    pub fn new() -> Self {
-        Self(ArrayVec::new())
-    }
+impl DieKindTable {
+    pub fn from_die_kinds(kinds: &[DieKind]) -> Self {
+        assert!(kinds.len() <= 6);
 
-    pub fn all_standard(ndice: u8) -> Self {
-        let mut arr = ArrayVec::new();
-        arr.push((DieKind::Standard, ndice));
+        let mut arr = [DieKind::SENTINEL; 6];
+
+        arr[..kinds.len()].copy_from_slice(kinds);
+        arr[..kinds.len()].sort_unstable();
+
+        assert!(is_total_order_by(
+            arr.into_iter().take_while(|kind| !kind.is_sentinel()),
+            |k1, k2| Some(k1.cmp(k2))
+        ));
+
         Self(arr)
     }
 
+    pub fn all_standard() -> Self {
+        Self::from_die_kinds(&[DieKind::Standard; 1])
+    }
+
+    #[inline]
+    pub fn get_kind(&self, idx: u8) -> DieKind {
+        self.0[idx as usize]
+    }
+
+    pub fn get_kind_idx(&self, kind: DieKind) -> Option<u8> {
+        (0..6).find_map(|idx| {
+            if self.get_kind(idx) == kind {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl Default for DieKindTable {
+    fn default() -> Self {
+        Self::all_standard()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DieKindCounts(MultisetU4x8);
+
+impl DieKindCounts {
+    #[inline]
+    pub fn new() -> Self {
+        Self(MultisetU4x8::new())
+    }
+
+    // pub fn all_standard(ndice: u8) -> Self {
+    //     let mut arr = ArrayVec::new();
+    //     arr.push((DieKind::Standard, ndice));
+    //     Self(arr)
+    // }
+
     pub fn from_dice_vec(dice: DiceVec) -> Self {
-        let counts = Self(
-            dice.group_by_die_kind()
-                .map(|(kind, kind_dice)| (kind, kind_dice.len()))
-                .collect(),
-        );
+        let counts = Self(MultisetU4x8::from_iter_flat(
+            dice.into_iter().map(Die::kind_idx),
+        ));
         debug_assert!(counts.invariant());
         counts
     }
 
-    pub fn validate_init_set(&self, rolled_kinds: &DieKindCounts) -> Result<(), String> {
-        if self.ndice() != 6 {
-            return Err("initial die kinds set must contain exactly 6 dice".to_string());
-        }
-        if !self.is_superset_of(rolled_kinds) {
-            return Err(format!(
-                "rolled dice can only contain dice from the initial die kinds set: \
-                 rolled kinds: '{}', initial kinds: '{}'",
-                rolled_kinds, self
-            ));
-        }
-
-        Ok(())
-    }
-
     fn invariant(&self) -> bool {
-        self.ndice() <= 6 && is_total_order_by(self.0.into_iter(), |x, y| Some(x.cmp(y)))
+        self.ndice() <= 6
     }
 
+    #[inline]
     pub fn ndice(&self) -> u8 {
-        self.0
-            .into_iter()
-            .map(|(_kind, kind_count)| kind_count)
-            .sum()
-    }
-
-    fn get_count(&self, kind: DieKind) -> u8 {
-        self.0
-            .into_iter()
-            .find_map(|(kind2, nkind2)| if kind2 == kind { Some(nkind2) } else { None })
-            .unwrap_or(0)
+        self.0.len()
     }
 
     fn spread_face(&self, face: u8) -> DiceVec {
         let mut dice = DiceVec::new();
-        for (kind, nkind) in self.0.into_iter() {
-            dice.push_n_die(Die::new(face, kind), nkind);
+        for (kind_idx, nkind) in self.into_iter() {
+            dice.push_n_die(Die::new(face, kind_idx), nkind);
         }
         dice
     }
 
-    fn contains(&self, kind: DieKind) -> bool {
-        self.0.into_iter().any(|(kind2, _)| kind2 == kind)
-    }
-
-    fn add_count(&mut self, kind: DieKind, nkind: u8) {
-        let idx = self.0.partition_point(|(other_kind, _)| other_kind < &kind);
-
-        if let Some((kind2, nkind2)) = self.0.get_mut(idx) {
-            if kind2 == &kind {
-                nkind2.add_assign(nkind);
-                return;
-            }
-        }
-
-        self.0.insert(idx, (kind, nkind));
+    #[inline]
+    pub fn sub_counts(&mut self, other: Self) {
+        debug_assert!(self.is_superset_of(&other));
+        self.0 -= other.0;
         debug_assert!(self.invariant());
     }
 
-    fn sub_count(&mut self, kind: DieKind, nkind: u8) {
-        use std::ops::SubAssign;
-        let (_kind2, nkind2) = self
-            .0
-            .iter_mut()
-            .find(|(kind2, _nkind2)| kind == *kind2)
-            .unwrap();
-        nkind2.sub_assign(nkind);
-    }
-
-    pub fn sub_counts(&mut self, other: Self) {
-        debug_assert!(self.is_superset_of(&other));
-        for (kind, nkind) in other.0.into_iter() {
-            self.sub_count(kind, nkind);
-        }
-    }
-
     pub fn is_superset_of(&self, other: &Self) -> bool {
-        other
-            .0
-            .into_iter()
-            .all(|(other_kind, other_nkind)| self.get_count(other_kind) >= other_nkind)
+        self.0.is_superset_of(other.0)
     }
 
     fn num_multisets(&self, nfaces: u32) -> u32 {
         // (6 multichoose k1) * (6 multichoose k2) * ..
-        self.0
-            .into_iter()
-            .map(|(_kind, nkind)| num_multisets(nfaces, nkind as u32))
+        self.into_iter()
+            .map(|(_kind_idx, nkind)| num_multisets(nfaces, nkind as u32))
             .product()
     }
 
@@ -258,102 +255,53 @@ impl DieKindCounts {
         rec(&mut |dice| out.push(dice), DiceVec::new(), *self, 1);
         out
     }
-}
 
-impl fmt::Display for DieKindCounts {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use itertools::Itertools;
-        let inner = self
-            .0
-            .into_iter()
-            .map(|(kind, kind_count)| format!("{}:{}", kind.as_memnonic(), kind_count))
-            .join(", ");
-        write!(f, "[{}]", inner)
+    #[inline]
+    pub fn into_iter(self) -> impl Iterator<Item = (u8, u8)> {
+        self.0.into_iter()
     }
 }
 
-impl FromIterator<(DieKind, u8)> for DieKindCounts {
-    fn from_iter<T: IntoIterator<Item = (DieKind, u8)>>(iter: T) -> Self {
-        let mut arr = ArrayVec::from_iter(iter.into_iter());
-        arr.sort_unstable();
-
-        let kinds = Self(arr);
-        assert!(kinds.invariant());
-        kinds
+impl FromIterator<(u8, u8)> for DieKindCounts {
+    #[inline]
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (u8, u8)>,
+    {
+        Self(MultisetU4x8::from_iter(iter))
     }
 }
 
-// [s:3,hk:2,o:1]
-
-impl FromStr for DieKindCounts {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut kinds = DieKindCounts::new();
-
-        let s = s.trim_start_matches('[');
-        let s = s.trim_end_matches(']');
-
-        let splitters = &[',', ' ', '\n', '\t'];
-
-        for kind_count_str in s.split(splitters).filter(|s| !s.is_empty()) {
-            match kind_count_str.split_once(':') {
-                Some((kind_str, count_str)) => {
-                    let kind = DieKind::from_memnonic(kind_str)
-                        .ok_or_else(|| format!("didn't recognize die kind: '{}'", kind_str))?;
-
-                    if kinds.contains(kind) {
-                        return Err(format!(
-                            "the dice kinds set can't contain any duplicates: already contains kind: '{}'",
-                            kind.as_memnonic(),
-                        ));
-                    }
-
-                    let count = count_str.parse::<u8>().map_err(|err| {
-                        format!("failed to parse die count: '{}', error: {}", count_str, err)
-                    })?;
-
-                    if !(1..=6).contains(&count) {
-                        return Err(format!(
-                            "die count needs to be in the range [1,6]: '{}'",
-                            count
-                        ));
-                    }
-
-                    kinds.add_count(kind, count);
-                }
-                None => return Err("".to_string()),
-            }
-        }
-
-        Ok(kinds)
-    }
-}
-
-#[derive(Copy, Clone, Eq)]
-pub struct Die {
-    face: u8,
-    kind: DieKind,
-}
+#[derive(Copy, Clone, Debug, Eq)]
+pub struct Die(u8);
 
 impl Default for Die {
     #[inline]
     fn default() -> Self {
-        Self {
-            face: 0,
-            kind: DieKind::SENTINEL,
-        }
+        // TODO(philiphayes): use idx=0 as dummy slot?
+        Self::new(0, 7)
     }
 }
 
 impl Die {
-    fn new(face: u8, kind: DieKind) -> Self {
-        Self { face, kind }
+    #[inline]
+    pub fn new(face: u8, kind_idx: u8) -> Self {
+        Self((face << 4) | (kind_idx & 0x0f))
     }
 
     #[inline]
-    fn as_u16(self) -> u16 {
-        (self.kind as u16) | ((self.face as u16) << 8)
+    fn as_u8(self) -> u8 {
+        self.0
+    }
+
+    #[inline]
+    pub fn face(self) -> u8 {
+        self.0 >> 4
+    }
+
+    #[inline]
+    pub fn kind_idx(self) -> u8 {
+        self.0 & 0x0f
     }
 
     // fn p_die(self) -> f64 {
@@ -364,90 +312,49 @@ impl Die {
 impl cmp::PartialEq for Die {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.as_u16().eq(&other.as_u16())
-    }
-    #[inline]
-    fn ne(&self, other: &Self) -> bool {
-        self.as_u16().ne(&other.as_u16())
+        self.as_u8().eq(&other.as_u8())
     }
 }
 
 impl cmp::PartialOrd for Die {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.as_u16().partial_cmp(&other.as_u16())
+        self.as_u8().partial_cmp(&other.as_u8())
     }
     #[inline]
     fn lt(&self, other: &Self) -> bool {
-        self.as_u16() < other.as_u16()
+        self.as_u8() < other.as_u8()
     }
     #[inline]
     fn le(&self, other: &Self) -> bool {
-        self.as_u16() <= other.as_u16()
+        self.as_u8() <= other.as_u8()
     }
     #[inline]
     fn gt(&self, other: &Self) -> bool {
-        self.as_u16() > other.as_u16()
+        self.as_u8() > other.as_u8()
     }
     #[inline]
     fn ge(&self, other: &Self) -> bool {
-        self.as_u16() >= other.as_u16()
+        self.as_u8() >= other.as_u8()
     }
 }
 
 impl cmp::Ord for Die {
     #[inline]
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.as_u16().cmp(&other.as_u16())
+        self.as_u8().cmp(&other.as_u8())
     }
 }
 
 impl Hash for Die {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write_u16(self.as_u16())
+        state.write_u8(self.as_u8())
     }
 }
 
-impl fmt::Debug for Die {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.face, self.kind)
-    }
-}
-
-fn str_split_at_safe(s: &str, mid: usize) -> Option<(&str, &str)> {
-    if s.is_char_boundary(mid) {
-        Some(unsafe { (s.get_unchecked(0..mid), s.get_unchecked(mid..s.len())) })
-    } else {
-        None
-    }
-}
-
-impl FromStr for Die {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        str_split_at_safe(s, 1)
-            .and_then(|(first, rest)| {
-                let face = first.parse::<u8>().ok()?;
-
-                if (1..=6).contains(&face) {
-                    let kind = DieKind::from_memnonic(rest)?;
-                    Some(Die { face, kind })
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                format!(
-                    "invalid die string '{}': expected format '<die-face><die-kind>'",
-                    s
-                )
-            })
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// #[derive(Copy, Clone, Eq)]
 pub struct DiceVec(ArrayVec<[Die; 6]>);
 // pub struct DiceVec([Die; 6]);
 
@@ -457,6 +364,55 @@ impl DiceVec {
     pub fn new() -> Self {
         Self(ArrayVec::new())
     }
+
+    // #[inline]
+    // fn as_u128(self) -> u128 {
+    //     let d0 = match self.0.get(0) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //     let d1 = match self.0.get(1) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //     let d2 = match self.0.get(2) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //     let d3 = match self.0.get(3) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //     let d4 = match self.0.get(4) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //     let d5 = match self.0.get(5) {
+    //         Some(&x) => x,
+    //         None => Die::default(),
+    //     };
+    //
+    //     let bs: [u8; 16] = [
+    //         0,
+    //         0,
+    //         0,
+    //         0,
+    //         d5.kind as u8,
+    //         d5.face as u8,
+    //         d4.kind as u8,
+    //         d4.face as u8,
+    //         d3.kind as u8,
+    //         d3.face as u8,
+    //         d2.kind as u8,
+    //         d2.face as u8,
+    //         d1.kind as u8,
+    //         d1.face as u8,
+    //         d0.kind as u8,
+    //         d0.face as u8,
+    //     ];
+    //
+    //     u128::from_le_bytes(bs)
+    // }
 
     // #[cfg(test)]
     // fn from_rolls(rolls: &[u8]) -> Self {
@@ -589,25 +545,28 @@ impl DiceVec {
         DieKindCounts::from_dice_vec(self)
     }
 
-    fn die_kinds(&self) -> ArrayVec<[DieKind; 6]> {
-        let mut kinds = ArrayVec::new();
-        for die in self.into_iter() {
-            if !kinds.contains(&die.kind) {
-                kinds.push(die.kind);
-            }
-        }
-        kinds.sort();
-        kinds
-    }
-
-    fn die_with_kind(&self, kind: DieKind) -> DiceVec {
-        Self::from_sorted_iter(self.into_iter().filter(|die| die.kind == kind))
-    }
-
-    fn group_by_die_kind(self) -> impl Iterator<Item = (DieKind, DiceVec)> {
-        self.die_kinds()
+    fn die_kind_idxs(&self) -> impl Iterator<Item = u8> {
+        self.into_die_kind_counts()
             .into_iter()
-            .map(move |kind| (kind, self.die_with_kind(kind)))
+            .filter_map(
+                |(kind_idx, count)| {
+                    if count != 0 {
+                        Some(kind_idx)
+                    } else {
+                        None
+                    }
+                },
+            )
+    }
+
+    fn die_with_kind_idx(&self, kind_idx: u8) -> DiceVec {
+        Self::from_sorted_iter(self.into_iter().filter(|die| die.kind_idx() == kind_idx))
+    }
+
+    fn group_by_die_kind_idx(self) -> impl Iterator<Item = (u8, DiceVec)> {
+        self.die_kind_idxs()
+            .into_iter()
+            .map(move |kind_idx| (kind_idx, self.die_with_kind_idx(kind_idx)))
     }
 
     #[inline]
@@ -632,10 +591,11 @@ impl DiceVec {
 
     /// Return the probability of rolling this set of dice, potentially containing
     /// many different kinds of dice with different die distributions.
-    pub fn p_roll(&self) -> f64 {
-        self.group_by_die_kind()
-            .map(|(kind, dice_kind)| {
-                DiceCounts::from_dice_vec(dice_kind).p_roll_with_distr(kind.die_distr())
+    pub fn p_roll(&self, kind_table: &DieKindTable) -> f64 {
+        self.group_by_die_kind_idx()
+            .map(|(kind_idx, dice_kind)| {
+                let distr = kind_table.get_kind(kind_idx).die_distr();
+                DiceCounts::from_dice_vec(dice_kind).p_roll_with_distr(distr)
             })
             .product()
     }
@@ -662,13 +622,53 @@ impl DiceVec {
     }
 }
 
-impl fmt::Debug for DiceVec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use itertools::Itertools;
-        let pieces = self.into_iter().map(|die| format!("{:?}", die)).join(", ");
-        write!(f, "[{}]", pieces)
-    }
-}
+// impl cmp::PartialEq for DiceVec {
+//     #[inline]
+//     fn eq(&self, other: &Self) -> bool {
+//         self.as_u128().eq(&other.as_u128())
+//     }
+//     #[inline]
+//     fn ne(&self, other: &Self) -> bool {
+//         self.as_u128().ne(&other.as_u128())
+//     }
+// }
+//
+// impl cmp::PartialOrd for DiceVec {
+//     #[inline]
+//     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+//         self.as_u128().partial_cmp(&other.as_u128())
+//     }
+//     #[inline]
+//     fn lt(&self, other: &Self) -> bool {
+//         self.as_u128() < other.as_u128()
+//     }
+//     #[inline]
+//     fn le(&self, other: &Self) -> bool {
+//         self.as_u128() <= other.as_u128()
+//     }
+//     #[inline]
+//     fn gt(&self, other: &Self) -> bool {
+//         self.as_u128() > other.as_u128()
+//     }
+//     #[inline]
+//     fn ge(&self, other: &Self) -> bool {
+//         self.as_u128() >= other.as_u128()
+//     }
+// }
+//
+// impl cmp::Ord for DiceVec {
+//     #[inline]
+//     fn cmp(&self, other: &Self) -> cmp::Ordering {
+//         self.as_u128().cmp(&other.as_u128())
+//     }
+// }
+//
+// impl Hash for DiceVec {
+//     #[inline]
+//     fn hash<H: Hasher>(&self, state: &mut H) {
+//         state.write_u128(self.as_u128())
+//     }
+// }
 
 impl IntoIterator for DiceVec {
     type Item = Die;
@@ -690,30 +690,6 @@ impl FromIterator<Die> for DiceVec {
             dice.add_die(die)
         }
         dice
-    }
-}
-
-impl FromStr for DiceVec {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut dice = DiceVec::new();
-
-        let s = s.trim_start_matches('[');
-        let s = s.trim_end_matches(']');
-
-        let splitters = &[',', ' ', '\n', '\t'];
-
-        for die_str in s.split(splitters).filter(|s| !s.is_empty()) {
-            if dice.len() >= 6 {
-                return Err("too many dice".to_string());
-            }
-
-            let die = die_str.parse::<Die>()?;
-            dice.add_die(die);
-        }
-
-        Ok(dice)
     }
 }
 
@@ -813,27 +789,19 @@ impl FusedIterator for DiceVecMultisetsIter {}
 /// the order of dice in a set is not important.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DiceCounts(pub u32);
+pub struct DiceCounts(MultisetU4x8);
 
 impl DiceCounts {
     /// A new empty set of dice rolls.
     #[inline]
     pub const fn new() -> Self {
-        Self(0)
+        Self(MultisetU4x8::new())
     }
-
-    // #[inline]
-    // const fn from_roll_count(roll: u8, count: u8) -> Self {
-    //     Self(((count as u32) & 0x7) << (4 * (roll as u32)))
-    // }
 
     #[inline]
     const fn from_counts(cs: [u8; 6]) -> Self {
-        Self(u32::from_le_bytes([
-            cs[0] << 4,
-            cs[1] | (cs[2] << 4),
-            cs[3] | (cs[4] << 4),
-            cs[5],
+        Self(MultisetU4x8::from_counts([
+            0, cs[0], cs[1], cs[2], cs[3], cs[4], cs[5], 0,
         ]))
     }
 
@@ -844,54 +812,45 @@ impl DiceCounts {
     /// A convenience function for constructing a `DiceCounts` set from an unordered
     /// list of dice rolls.
     #[cfg(test)]
-    pub fn from_rolls(rolls: &[u8]) -> Self {
-        let mut counts_arr = [0u8; 7];
-        for roll in rolls {
-            counts_arr[*roll as usize] += 1;
-        }
+    pub fn from_faces(faces: &[u8]) -> Self {
+        Self(MultisetU4x8::from_iter_flat(faces.iter().copied()))
+    }
 
-        let mut counts = Self::new();
-        for roll in 1..=6 {
-            counts.set_count(roll, counts_arr[roll as usize]);
-        }
-        counts
+    #[inline]
+    pub fn as_u32(self) -> u32 {
+        self.0.as_u32()
     }
 
     #[inline]
     pub fn is_empty(self) -> bool {
-        self.0 == 0
+        self.0.is_empty()
     }
 
     // The number of dice in this set
     #[inline]
     pub fn len(self) -> u8 {
-        let mut len = 0;
-        for roll in 1..=6 {
-            len += self.get_count(roll);
-        }
-        len
+        self.0.len()
     }
 
     #[inline]
-    pub fn get_count(self, roll: u8) -> u8 {
-        ((self.0 >> (4 * (roll as u32))) & 0x7) as u8
+    pub fn get_count(self, face: u8) -> u8 {
+        self.0.get_count(face)
     }
 
     #[inline]
     #[cfg(test)]
-    pub fn set_count(&mut self, roll: u8, count: u8) {
-        self.0 = (self.0 & !(0x7 << (4 * (roll as u32))))
-            + (((count as u32) & 0x7) << (4 * (roll as u32)));
+    pub fn set_count(&mut self, face: u8, count: u8) {
+        self.0.set_count(face, count)
     }
 
     #[inline]
-    pub fn add_count(&mut self, roll: u8, count: u8) {
-        self.0 += ((count as u32) & 0x7) << (4 * (roll as u32));
+    pub fn add_count(&mut self, face: u8, count: u8) {
+        self.0 += MultisetU4x8::from_count(face, count);
     }
 
     #[cfg(test)]
     #[inline]
-    const fn add(self, other: Self) -> Self {
+    fn add(self, other: Self) -> Self {
         Self(self.0 + other.0)
     }
 
@@ -1020,7 +979,7 @@ impl DiceCounts {
         } else {
             // do we have less than 3 (and greater than 0) of any non-scoring
             // dice (2, 3, 4, or 6)? then this is not a valid hold.
-            !u32_any_nibs_between(self.0, 0x0101_1100, 0, 3)
+            !u32_any_nibs_between(self.as_u32(), 0x0101_1100, 0, 3)
         }
     }
 
@@ -1150,12 +1109,14 @@ impl fmt::Debug for DiceCounts {
     }
 }
 
+#[cfg(test)]
 impl cmp::Ord for DiceCounts {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.to_rolls().cmp(&other.to_rolls())
     }
 }
 
+#[cfg(test)]
 impl cmp::PartialOrd for DiceCounts {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
@@ -1168,11 +1129,9 @@ impl FromIterator<Die> for DiceCounts {
     where
         T: IntoIterator<Item = Die>,
     {
-        let mut counts = DiceCounts::new();
-        for die in iter.into_iter() {
-            counts.add_count(die.face, 1);
-        }
-        counts
+        Self(MultisetU4x8::from_iter_flat(
+            iter.into_iter().map(|die| die.face()),
+        ))
     }
 }
 
@@ -1193,7 +1152,7 @@ impl Arbitrary for DiceCounts {
         ];
 
         proptest::sample::subsequence(ROLLS_SET.as_ref(), 0..=6)
-            .prop_map(|rolls| DiceCounts::from_rolls(&rolls))
+            .prop_map(|rolls| DiceCounts::from_faces(&rolls))
             .boxed()
     }
 }
@@ -1292,18 +1251,30 @@ cfg_test! {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::num_combinations;
+    use crate::{num_combinations, parse};
     use approx::assert_relative_eq;
-    use claim::assert_err;
     use proptest::prelude::*;
     use std::{cmp::min, collections::HashSet};
+
+    macro_rules! table {
+        () => {
+            DieKindTable::all_standard()
+        };
+        ($($x:tt),+ $(,)?) => {
+            DieKindTable::from_die_kinds(&[ $( DieKind::from_memnonic(stringify!($x)).unwrap() ),+ ])
+        };
+    }
 
     macro_rules! dice {
         () => {
             DiceVec::new()
         };
+        ($tbl:expr, [ $($x:tt),+ $(,)? ] $(,)?) => {
+            parse::DiceVec::from_iter([$( parse::Die::from_str(stringify!($x)).unwrap() ),+ ].into_iter())
+                .to_compact_form(&$tbl)
+        };
         ($($x:tt),+ $(,)?) => {
-            DiceVec::from_iter([ $( Die::from_str(stringify!($x)).unwrap() ),+ ].into_iter())
+            dice![table!(), [ $( $x ),+ ]]
         };
     }
 
@@ -1384,17 +1355,17 @@ mod test {
 
     #[test]
     fn test_dice_counts_score() {
-        assert_eq!(0, DiceCounts::from_rolls(&[]).score());
-        assert_eq!(100, DiceCounts::from_rolls(&[1]).score());
-        assert_eq!(150, DiceCounts::from_rolls(&[5, 1]).score());
-        assert_eq!(0, DiceCounts::from_rolls(&[2, 2, 3]).score());
-        assert_eq!(1500, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).score());
-        assert_eq!(250, DiceCounts::from_rolls(&[1, 1, 5, 3, 2, 2]).score());
-        assert_eq!(1050, DiceCounts::from_rolls(&[1, 1, 5, 3, 1, 2]).score());
-        assert_eq!(400, DiceCounts::from_rolls(&[4, 4, 4]).score());
-        assert_eq!(800, DiceCounts::from_rolls(&[4, 4, 4, 4]).score());
-        assert_eq!(1600, DiceCounts::from_rolls(&[4, 4, 4, 4, 4]).score());
-        assert_eq!(3200, DiceCounts::from_rolls(&[4, 4, 4, 4, 4, 4]).score());
+        assert_eq!(0, DiceCounts::from_faces(&[]).score());
+        assert_eq!(100, DiceCounts::from_faces(&[1]).score());
+        assert_eq!(150, DiceCounts::from_faces(&[5, 1]).score());
+        assert_eq!(0, DiceCounts::from_faces(&[2, 2, 3]).score());
+        assert_eq!(1500, DiceCounts::from_faces(&[6, 5, 4, 3, 2, 1]).score());
+        assert_eq!(250, DiceCounts::from_faces(&[1, 1, 5, 3, 2, 2]).score());
+        assert_eq!(1050, DiceCounts::from_faces(&[1, 1, 5, 3, 1, 2]).score());
+        assert_eq!(400, DiceCounts::from_faces(&[4, 4, 4]).score());
+        assert_eq!(800, DiceCounts::from_faces(&[4, 4, 4, 4]).score());
+        assert_eq!(1600, DiceCounts::from_faces(&[4, 4, 4, 4, 4]).score());
+        assert_eq!(3200, DiceCounts::from_faces(&[4, 4, 4, 4, 4, 4]).score());
     }
 
     proptest! {
@@ -1408,19 +1379,19 @@ mod test {
 
     #[test]
     fn test_dice_counts_from_rolls() {
-        assert!(DiceCounts::from_rolls(&[]).is_empty());
+        assert!(DiceCounts::from_faces(&[]).is_empty());
 
-        assert_eq!(0, DiceCounts::from_rolls(&[]).len());
-        assert_eq!(1, DiceCounts::from_rolls(&[1]).len());
-        assert_eq!(2, DiceCounts::from_rolls(&[4, 2]).len());
-        assert_eq!(6, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).len());
+        assert_eq!(0, DiceCounts::from_faces(&[]).len());
+        assert_eq!(1, DiceCounts::from_faces(&[1]).len());
+        assert_eq!(2, DiceCounts::from_faces(&[4, 2]).len());
+        assert_eq!(6, DiceCounts::from_faces(&[6, 5, 4, 3, 2, 1]).len());
 
-        assert_eq!(1, DiceCounts::from_rolls(&[6, 5, 4, 3, 2, 1]).get_count(6));
-        assert_eq!(3, DiceCounts::from_rolls(&[6, 5, 3, 3, 3]).get_count(3));
-        assert_eq!(0, DiceCounts::from_rolls(&[6, 5, 3, 3, 3]).get_count(1));
-        assert_eq!(6, DiceCounts::from_rolls(&[3, 3, 3, 3, 3, 3]).get_count(3));
-        assert_eq!(6, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(6));
-        assert_eq!(0, DiceCounts::from_rolls(&[6, 6, 6, 6, 6, 6]).get_count(3));
+        assert_eq!(1, DiceCounts::from_faces(&[6, 5, 4, 3, 2, 1]).get_count(6));
+        assert_eq!(3, DiceCounts::from_faces(&[6, 5, 3, 3, 3]).get_count(3));
+        assert_eq!(0, DiceCounts::from_faces(&[6, 5, 3, 3, 3]).get_count(1));
+        assert_eq!(6, DiceCounts::from_faces(&[3, 3, 3, 3, 3, 3]).get_count(3));
+        assert_eq!(6, DiceCounts::from_faces(&[6, 6, 6, 6, 6, 6]).get_count(6));
+        assert_eq!(0, DiceCounts::from_faces(&[6, 6, 6, 6, 6, 6]).get_count(3));
     }
 
     #[test]
@@ -1429,16 +1400,16 @@ mod test {
 
         assert_eq!(
             DiceCounts::from_counts([1; 6]),
-            DiceCounts::from_rolls(&[1, 2, 3, 4, 5, 6]),
+            DiceCounts::from_faces(&[1, 2, 3, 4, 5, 6]),
         );
 
         assert_eq!(
             DiceCounts::from_counts([1, 0, 1, 0, 1, 0]),
-            DiceCounts::from_rolls(&[1, 3, 5]),
+            DiceCounts::from_faces(&[1, 3, 5]),
         );
         assert_eq!(
             DiceCounts::from_counts([1, 2, 0, 3, 0, 0]),
-            DiceCounts::from_rolls(&[1, 2, 2, 4, 4, 4]),
+            DiceCounts::from_faces(&[1, 2, 2, 4, 4, 4]),
         );
     }
 
@@ -1482,7 +1453,10 @@ mod test {
             );
         }
 
-        let kind_counts = DieKindCounts::from_dice_vec(dice![1, 1, 1, 1hk, 1hk, 1o]);
+        let kind_counts = DieKindCounts::from_dice_vec(dice!(
+            table![s, hk, o],
+            [1, 1, 1, 1hk, 1hk, 1o],
+        ));
         let combs = kind_counts.all_multisets();
 
         // outputs expected number of elements
@@ -1497,14 +1471,14 @@ mod test {
     fn test_dice_multisets() {
         // [1 1], [1 3], [1 5], [3 5]
         let expected = vec![
-            DiceCounts::from_rolls(&[1, 1]),
-            DiceCounts::from_rolls(&[1, 3]),
-            DiceCounts::from_rolls(&[1, 5]),
-            DiceCounts::from_rolls(&[3, 5]),
+            DiceCounts::from_faces(&[1, 1]),
+            DiceCounts::from_faces(&[1, 3]),
+            DiceCounts::from_faces(&[1, 5]),
+            DiceCounts::from_faces(&[3, 5]),
         ];
         assert_eq!(
             &expected,
-            &DiceCounts::from_rolls(&[1, 1, 3, 5]).multisets(2),
+            &DiceCounts::from_faces(&[1, 1, 3, 5]).multisets(2),
         );
 
         // when all the elements are unique, this is just the normal set
@@ -1512,7 +1486,7 @@ mod test {
         for k in 0..=6 {
             assert_eq!(
                 num_combinations(6, k) as usize,
-                DiceCounts::from_rolls(&[1, 2, 3, 4, 5, 6])
+                DiceCounts::from_faces(&[1, 2, 3, 4, 5, 6])
                     .multisets(k as u8)
                     .len(),
             );
@@ -1520,26 +1494,18 @@ mod test {
     }
 
     #[test]
-    fn test_dice_vec_from_str() {
-        assert_eq!(dice![], DiceVec::from_str("").unwrap());
-        assert_eq!(dice![], DiceVec::from_str("[]").unwrap());
-        assert_eq!(
-            dice![1, 2hk, 3o],
-            DiceVec::from_str("[1, 2hk, 3o]").unwrap()
-        );
-    }
-
-    #[test]
     fn test_dice_vec_unique_dice() {
         assert_eq!(dice![], dice![].unique_dice());
-        assert_eq!(dice![1, 2hk, 3o], dice![1, 2hk, 3o].unique_dice());
+
+        let t = table![s, hk, o];
+        assert_eq!(dice!(t, [1, 2hk, 3o]), dice!(t, [1, 2hk, 3o]).unique_dice(),);
         assert_eq!(
-            dice![1, 2hk, 3o],
-            dice![1, 1, 1, 2hk, 2hk, 3o].unique_dice()
+            dice!(t, [1, 2hk, 3o]),
+            dice!(t, [1, 1, 1, 2hk, 2hk, 3o]).unique_dice(),
         );
         assert_eq!(
-            dice![1, 1hk, 1o],
-            dice![1, 1, 1, 1hk, 1hk, 1o].unique_dice()
+            dice!(t, [1, 1hk, 1o]),
+            dice!(t, [1, 1, 1, 1hk, 1hk, 1o]).unique_dice(),
         );
     }
 
@@ -1548,95 +1514,124 @@ mod test {
         assert_eq!(dice![], dice![].merge(&dice![]));
         assert_eq!(dice![1], dice![1].merge(&dice![]));
         assert_eq!(dice![1], dice![].merge(&dice![1]));
-        assert_eq!(dice![1, 2hk, 3o], dice![2hk].merge(&dice![1, 3o]));
+
+        let t = table![s, hk, o];
         assert_eq!(
-            dice![1, 1, 2hk, 2hk, 3o, 3o],
-            dice![2hk, 3o].merge(&dice![1, 1, 2hk, 3o])
+            dice!(t, [1, 2hk, 3o]),
+            dice!(t, [2hk]).merge(&dice!(t, [1, 3o])),
         );
         assert_eq!(
-            dice![1, 1, 1hk, 1hk, 1o, 1o],
-            dice![1hk, 1o].merge(&dice![1, 1, 1hk, 1o])
+            dice!(t, [1, 1, 2hk, 2hk, 3o, 3o]),
+            dice!(t, [2hk, 3o]).merge(&dice!(t, [1, 1, 2hk, 3o]))
+        );
+        assert_eq!(
+            dice!(t, [1, 1, 1hk, 1hk, 1o, 1o]),
+            dice!(t, [1hk, 1o]).merge(&dice!(t, [1, 1, 1hk, 1o]))
         );
     }
 
     #[test]
     fn test_dice_vec_multisets() {
         use itertools::Itertools;
+
+        let t = table!(s, hk, o);
+
+        macro_rules! dicet {
+            () => {
+                DiceVec::new()
+            };
+            ($($x:tt),+ $(,)?) => {
+                dice![t, [ $( $x ),+ ]]
+            };
+        }
+
         assert_eq!(
-            vec![dice![]],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(0).collect_vec(),
+            vec![dicet![]],
+            dicet![1, 1, 1, 2hk, 2hk, 3o]
+                .multisets_iter(0)
+                .collect_vec(),
         );
         assert_eq!(
-            vec![dice![1], dice![2hk], dice![3o]],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(1).collect_vec(),
+            vec![dicet![1], dicet![2hk], dicet![3o]],
+            dicet![1, 1, 1, 2hk, 2hk, 3o]
+                .multisets_iter(1)
+                .collect_vec(),
         );
         assert_eq!(
-            vec![dice![1], dice![1hk], dice![1o]],
-            dice![1, 1, 1, 1hk, 1hk, 1o].multisets_iter(1).collect_vec(),
+            vec![dicet![1], dicet![1hk], dicet![1o]],
+            dicet![1, 1, 1, 1hk, 1hk, 1o]
+                .multisets_iter(1)
+                .collect_vec(),
         );
         assert_eq!(
             vec![
-                dice![1, 1],
-                dice![1, 2hk],
-                dice![1, 3o],
-                dice![2hk, 2hk],
-                dice![2hk, 3o]
+                dicet![1, 1],
+                dicet![1, 2hk],
+                dicet![1, 3o],
+                dicet![2hk, 2hk],
+                dicet![2hk, 3o]
             ],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(2).collect_vec(),
+            dicet![1, 1, 1, 2hk, 2hk, 3o]
+                .multisets_iter(2)
+                .collect_vec(),
         );
         assert_eq!(
             vec![
-                dice![1, 1, 1],
-                dice![1, 1, 2hk],
-                dice![1, 1, 3o],
-                dice![1, 2hk, 2hk],
-                dice![1, 2hk, 3o],
-                dice![2hk, 2hk, 3o],
+                dicet![1, 1, 1],
+                dicet![1, 1, 2hk],
+                dicet![1, 1, 3o],
+                dicet![1, 2hk, 2hk],
+                dicet![1, 2hk, 3o],
+                dicet![2hk, 2hk, 3o],
             ],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(3).collect_vec(),
+            dicet![1, 1, 1, 2hk, 2hk, 3o]
+                .multisets_iter(3)
+                .collect_vec(),
         );
         assert_eq!(
-            vec![dice![1, 1, 1, 2hk, 2hk, 3o]],
-            dice![1, 1, 1, 2hk, 2hk, 3o].multisets_iter(6).collect_vec(),
+            vec![dicet![1, 1, 1, 2hk, 2hk, 3o]],
+            dicet![1, 1, 1, 2hk, 2hk, 3o]
+                .multisets_iter(6)
+                .collect_vec(),
         );
 
         assert_eq!(
             vec![
-                dice![1, 1hk],
-                dice![1, 2],
-                dice![1, 2hk],
-                dice![1, 3],
-                dice![1, 3hk],
-                dice![1hk, 2],
-                dice![1hk, 2hk],
-                dice![1hk, 3],
-                dice![1hk, 3hk],
-                dice![2, 2hk],
-                dice![2, 3],
-                dice![2, 3hk],
-                dice![2hk, 3],
-                dice![2hk, 3hk],
-                dice![3, 3hk],
+                dicet![1, 1hk],
+                dicet![1, 2],
+                dicet![1, 2hk],
+                dicet![1, 3],
+                dicet![1, 3hk],
+                dicet![1hk, 2],
+                dicet![1hk, 2hk],
+                dicet![1hk, 3],
+                dicet![1hk, 3hk],
+                dicet![2, 2hk],
+                dicet![2, 3],
+                dicet![2, 3hk],
+                dicet![2hk, 3],
+                dicet![2hk, 3hk],
+                dicet![3, 3hk],
             ],
-            dice![1, 1hk, 2, 2hk, 3, 3hk]
+            dicet![1, 1hk, 2, 2hk, 3, 3hk]
                 .multisets_iter(2)
                 .collect_vec(),
         );
 
         assert_eq!(
-            vec![dice![1, 1], dice![1, 1o], dice![1o, 1o]],
-            dice![1, 1, 1o, 1o, 1o, 1o].multisets_iter(2).collect_vec(),
+            vec![dicet![1, 1], dicet![1, 1o], dicet![1o, 1o]],
+            dicet![1, 1, 1o, 1o, 1o, 1o].multisets_iter(2).collect_vec(),
         );
 
         assert_eq!(
             vec![
-                dice![1, 1, 2, 2],
-                dice![1, 1, 2, 3],
-                dice![1, 2, 2, 2],
-                dice![1, 2, 2, 3],
-                dice![2, 2, 2, 3],
+                dicet![1, 1, 2, 2],
+                dicet![1, 1, 2, 3],
+                dicet![1, 2, 2, 2],
+                dicet![1, 2, 2, 3],
+                dicet![2, 2, 2, 3],
             ],
-            dice![1, 1, 2, 2, 2, 3].multisets_iter(4).collect_vec(),
+            dicet![1, 1, 2, 2, 2, 3].multisets_iter(4).collect_vec(),
         );
 
         // when all the elements are unique, this is just the normal set
@@ -1644,7 +1639,7 @@ mod test {
         for k in 0..=6 {
             assert_eq!(
                 num_combinations(6, k as u32) as usize,
-                dice![1, 1hk, 1o, 2, 2hk, 2o].multisets_iter(k).count(),
+                dicet![1, 1hk, 1o, 2, 2hk, 2o].multisets_iter(k).count(),
             );
         }
     }
@@ -1653,7 +1648,7 @@ mod test {
     fn test_dice_counts_probability() {
         assert_relative_eq!(
             3.0 / ((6.0_f64).powf(3.0)),
-            DiceCounts::from_rolls(&[1, 1, 3]).p_roll()
+            DiceCounts::from_faces(&[1, 1, 3]).p_roll()
         );
 
         for n in 1..=6 {
@@ -1671,16 +1666,15 @@ mod test {
     fn test_dice_vec_p_roll() {
         // rolling just standard dice should give approx. the same result as
         // DiceCounts::p_roll
+        let t = table![s];
         assert_relative_eq!(
-            dice![1, 1, 1, 2, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 1, 2, 2, 3]).p_roll(),
+            dice!(t, [1, 1, 1, 2, 2, 3]).p_roll(&t),
+            DiceCounts::from_dice_vec(dice!(t, [1, 1, 1, 2, 2, 3])).p_roll(),
         );
         assert_relative_eq!(
-            dice![1, 1, 2, 3].p_roll(),
-            DiceCounts::from_dice_vec(dice![1, 1, 2, 3]).p_roll(),
+            dice!(t, [1, 1, 2, 3]).p_roll(&t),
+            DiceCounts::from_dice_vec(dice!(t, [1, 1, 2, 3])).p_roll(),
         );
-
-        use super::DieKind::{HeavenlyKingdomDie as hk, OddDie as o, Standard as s};
 
         // exhaustively check that all combinations of {s, hk, o} die kinds will
         // emit proper probability mass functions (where the pmf is effectively
@@ -1688,13 +1682,23 @@ mod test {
 
         let mut die_kind_combs = Vec::new();
 
+        use super::DieKind::{HeavenlyKingdomDie as hk, OddDie as o, Standard as s};
+        let t = table![s, hk, o];
+        let s_idx = t.get_kind_idx(s).unwrap();
+        let hk_idx = t.get_kind_idx(hk).unwrap();
+        let o_idx = t.get_kind_idx(o).unwrap();
+
         for ndice in 0..=6 {
             for ns in 0..=ndice {
                 let nleft = ndice - ns;
                 for nhk in 0..=nleft {
                     let no = nleft - nhk;
 
-                    die_kind_combs.push(DieKindCounts::from_iter([(s, ns), (hk, nhk), (o, no)]))
+                    die_kind_combs.push(DieKindCounts::from_iter([
+                        (s_idx, ns),
+                        (hk_idx, nhk),
+                        (o_idx, no),
+                    ]))
                 }
             }
         }
@@ -1708,40 +1712,10 @@ mod test {
                 die_kinds
                     .all_multisets()
                     .into_iter()
-                    .map(|dice| dice.p_roll())
+                    .map(|dice| dice.p_roll(&t))
                     .sum(),
                 epsilon = 1.0e-10
             );
         }
-    }
-
-    #[test]
-    fn test_die_kind_counts_from_str() {
-        use super::DieKind::{HeavenlyKingdomDie as hk, OddDie as o, Standard as s};
-
-        assert_err!(DieKindCounts::from_str("[s:0]"));
-        assert_err!(DieKindCounts::from_str("[s:7]"));
-        assert_err!(DieKindCounts::from_str("[hk:2,o:1,s:7]"));
-        assert_err!(DieKindCounts::from_str("[s:1,o:1,s:1]"));
-        assert_eq!(
-            DieKindCounts::from_iter([(s, 6)]),
-            DieKindCounts::from_str("[s:6]").unwrap(),
-        );
-        assert_eq!(
-            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
-            DieKindCounts::from_str("[s:3,hk:2,o:1]").unwrap(),
-        );
-        assert_eq!(
-            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
-            DieKindCounts::from_str("[o:1,hk:2,s:3]").unwrap(),
-        );
-        assert_eq!(
-            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
-            DieKindCounts::from_str("[ s:3, hk:2, o:1 ]").unwrap(),
-        );
-        assert_eq!(
-            DieKindCounts::from_iter([(s, 3), (hk, 2), (o, 1)]),
-            DieKindCounts::from_str(" s:3, hk:2, o:1 ").unwrap(),
-        );
     }
 }

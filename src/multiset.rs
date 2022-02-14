@@ -7,8 +7,7 @@ use proptest::{
 use std::{
     cmp, fmt,
     hash::{Hash, Hasher},
-    iter::{repeat, FusedIterator},
-    ops::{self, Range},
+    ops,
 };
 
 /// A compressed representation of a multiset (a set with potential duplicates
@@ -57,20 +56,6 @@ impl MultisetU4x8 {
         ]
     }
 
-    // #[inline]
-    // pub fn from_iter(mut iter: impl Iterator<Item = u8> + FusedIterator) -> Self {
-    //     Self([
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //         iter.next().unwrap_or(0),
-    //     ])
-    // }
-
     #[inline]
     pub fn as_u32(self) -> u32 {
         self.0
@@ -96,6 +81,7 @@ impl MultisetU4x8 {
         (self.0 >> (4 * (idx as u32)) & 0x0f) as u8
     }
 
+    #[cfg(test)]
     #[inline]
     pub fn set_count(&mut self, idx: u8, count: u8) {
         debug_assert!((0..8).contains(&idx));
@@ -105,8 +91,18 @@ impl MultisetU4x8 {
             + (((count as u32) & 0x0f) << (4 * (idx as u32)));
     }
 
+    pub fn is_superset_of(self, other: Self) -> bool {
+        (0..8).all(|idx| self.get_count(idx) >= other.get_count(idx))
+    }
+
+    #[cfg(test)]
     pub fn into_iter_flat(self) -> impl Iterator<Item = u8> {
-        (0..8).flat_map(move |idx| repeat(idx).take(self.get_count(idx) as usize))
+        (0..8).flat_map(move |idx| std::iter::repeat(idx).take(self.get_count(idx) as usize))
+    }
+
+    pub fn from_iter_flat(iter: impl Iterator<Item = u8>) -> Self {
+        iter.map(|idx| Self::from_count(idx, 1))
+            .fold(Self::new(), |acc, single| acc + single)
     }
 
     pub fn into_iter(self) -> impl Iterator<Item = (u8, u8)> {
@@ -114,6 +110,17 @@ impl MultisetU4x8 {
             .into_iter()
             .enumerate()
             .map(|(idx, count)| (idx as u8, count))
+    }
+}
+
+impl FromIterator<(u8, u8)> for MultisetU4x8 {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = (u8, u8)>,
+    {
+        iter.into_iter().fold(Self::new(), |acc, (idx, count)| {
+            acc + MultisetU4x8::from_count(idx, count)
+        })
     }
 }
 
@@ -160,10 +167,6 @@ impl cmp::PartialEq for MultisetU4x8 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.as_u32().eq(&other.as_u32())
-    }
-    #[inline]
-    fn ne(&self, other: &Self) -> bool {
-        self.as_u32().ne(&other.as_u32())
     }
 }
 

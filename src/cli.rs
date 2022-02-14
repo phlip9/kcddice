@@ -1,5 +1,5 @@
 use crate::{
-    dice::{DiceVec, DieKindCounts},
+    parse,
     search::{p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, State},
     DEFAULT_TARGET_SCORE,
 };
@@ -25,8 +25,8 @@ pub trait Command: Sized {
 pub struct BestActionCommand {
     round_total: u16,
     target_score: u16,
-    rolled_dice: DiceVec,
-    all_dice: DieKindCounts,
+    rolled_dice: parse::DiceVec,
+    all_dice: parse::DiceSet,
 }
 
 impl Command for BestActionCommand {
@@ -62,11 +62,11 @@ OPTIONS:
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice
-            .validate_init_set(&DieKindCounts::from_dice_vec(cmd.rolled_dice))?;
+            .validate_init_set(&cmd.rolled_dice.to_die_set())?;
 
         let remaining = args.finish();
         if !remaining.is_empty() {
@@ -77,9 +77,11 @@ OPTIONS:
     }
 
     fn run(self) {
-        let state = State::new(self.round_total, self.target_score, self.rolled_dice);
-        let mut ctxt = Context::new();
-        ctxt.set_all_dice(self.all_dice);
+        let (dice_table, all_dice) = self.all_dice.to_compact_form();
+        let mut ctxt = Context::new(dice_table, all_dice);
+
+        let rolled_dice = self.rolled_dice.to_compact_form(&dice_table);
+        let state = State::new(self.round_total, self.target_score, rolled_dice);
 
         let start_time = Instant::now();
         let actions_values = state.actions_by_expected_value(&mut ctxt);
@@ -98,7 +100,13 @@ OPTIONS:
             let p_bust_str = format!("{:0.2}", p_bust);
             let (action_str, dice_str) = match action {
                 Action::Pass => ("pass", String::new()),
-                Action::Roll(held_dice) => ("hold dice", format!("{:?}", held_dice)),
+                Action::Roll(held_dice) => (
+                    "hold dice",
+                    format!(
+                        "{}",
+                        parse::DiceVec::from_compact_form(&dice_table, held_dice)
+                    ),
+                ),
             };
             table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
         }
@@ -157,8 +165,8 @@ OPTIONS:
 pub struct ScoreDistrCommand {
     round_total: u16,
     target_score: u16,
-    dice_left: DieKindCounts,
-    all_dice: DieKindCounts,
+    dice_left: parse::DiceSet,
+    all_dice: parse::DiceSet,
 }
 
 impl Command for ScoreDistrCommand {
@@ -179,7 +187,7 @@ USAGE:
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.dice_left)?;
@@ -193,11 +201,11 @@ USAGE:
     }
 
     fn run(self) {
-        let qstate =
-            NormalizedStateAction::new(self.round_total, self.target_score, self.dice_left);
+        let (dice_table, all_dice_counts) = self.all_dice.to_compact_form();
+        let dice_left = self.dice_left.to_counts(&dice_table);
+        let mut ctxt = Context::new(dice_table, all_dice_counts);
 
-        let mut ctxt = Context::new();
-        ctxt.set_all_dice(self.all_dice);
+        let qstate = NormalizedStateAction::new(self.round_total, self.target_score, dice_left);
 
         let start_time = Instant::now();
         let score_pmf = qstate.score_distribution(&mut ctxt);
@@ -231,7 +239,7 @@ USAGE:
 #[derive(Debug)]
 pub struct MarkovMatrixCommand {
     target_score: u16,
-    all_dice: DieKindCounts,
+    all_dice: parse::DiceSet,
 }
 
 impl Command for MarkovMatrixCommand {
@@ -249,7 +257,7 @@ impl Command for MarkovMatrixCommand {
             all_dice: args
                 .opt_value_from_str(["--die-kinds", "-k"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.all_dice)?;
@@ -264,7 +272,8 @@ impl Command for MarkovMatrixCommand {
 
     fn run(self) {
         let start_time = Instant::now();
-        let matrix = MarkovMatrix::from_optimal_policy(self.all_dice, self.target_score);
+        let (die_table, die_counts) = self.all_dice.to_compact_form();
+        let matrix = MarkovMatrix::from_optimal_policy(die_table, die_counts, self.target_score);
         let search_duration = start_time.elapsed();
 
         println!("{:?}", matrix);
@@ -276,8 +285,8 @@ impl Command for MarkovMatrixCommand {
 pub struct TurnsCdfCommand {
     target_score: u16,
     max_num_turns: usize,
-    our_dice: DieKindCounts,
-    their_dice: DieKindCounts,
+    our_dice: parse::DiceSet,
+    their_dice: parse::DiceSet,
 }
 
 impl Command for TurnsCdfCommand {
@@ -293,11 +302,11 @@ impl Command for TurnsCdfCommand {
             our_dice: args
                 .opt_value_from_str(["--our-die-kinds", "-o"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
             their_dice: args
                 .opt_value_from_str(["--their-die-kinds", "-t"])
                 .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| DieKindCounts::all_standard(6)),
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.our_dice.validate_init_set(&cmd.our_dice)?;
@@ -314,14 +323,20 @@ impl Command for TurnsCdfCommand {
     fn run(self) {
         let start_time = Instant::now();
 
-        let our_matrix = MarkovMatrix::from_optimal_policy(self.our_dice, self.target_score);
+        let (our_die_table, our_die_counts) = self.our_dice.to_compact_form();
+        let our_matrix =
+            MarkovMatrix::from_optimal_policy(our_die_table, our_die_counts, self.target_score);
         let our_turns_cdf = our_matrix.turns_to_win_cdf(self.max_num_turns);
 
         let their_turns_cdf = if self.our_dice == self.their_dice {
             our_turns_cdf.clone()
         } else {
-            let their_matrix =
-                MarkovMatrix::from_optimal_policy(self.their_dice, self.target_score);
+            let (their_die_table, their_die_counts) = self.their_dice.to_compact_form();
+            let their_matrix = MarkovMatrix::from_optimal_policy(
+                their_die_table,
+                their_die_counts,
+                self.target_score,
+            );
             their_matrix.turns_to_win_cdf(self.max_num_turns)
         };
 

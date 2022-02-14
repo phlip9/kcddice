@@ -23,8 +23,9 @@
 mod macros;
 
 pub mod cli;
-mod multiset;
 mod dice;
+mod multiset;
+mod parse;
 mod search;
 
 use std::cmp;
