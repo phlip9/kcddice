@@ -12,7 +12,7 @@ itertools = "0.10.3"
 ndarray = "0.15.4"
 pico-args = "0.4.2"
 tabular = "0.2.0"
-tinyvec = { version = "1.5.1", features = ["grab_spare_slice"] }
+# tinyvec = { version = "1.5.1", features = ["grab_spare_slice"] }
 
 [dev-dependencies]
 proptest = "1.0.0"

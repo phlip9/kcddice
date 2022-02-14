@@ -221,15 +221,17 @@ impl DiceVec {
     }
 
     pub fn to_compact_form(&self, table: &DieKindTable) -> dice::DiceVec {
-        self.0
+        let mut dice = self
+            .0
             .iter()
             .map(|die| die.into_compact_form(table))
-            .collect()
+            .collect::<Vec<_>>();
+        dice::DiceVec::from_slice(&mut dice)
     }
 
     pub fn from_compact_form(table: &DieKindTable, dice: dice::DiceVec) -> Self {
         Self(
-            dice.into_iter()
+            dice.into_iter_no_sentinel()
                 .map(|die| Die::from_compact_form(table, die))
                 .collect(),
         )

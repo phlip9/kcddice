@@ -137,6 +137,13 @@ where
     true
 }
 
+pub(crate) fn is_partitioned<T>(
+    mut iter: impl Iterator<Item = T>,
+    mut pred: impl FnMut(T) -> bool,
+) -> bool {
+    iter.all(&mut pred) || !iter.any(pred)
+}
+
 ///////////////
 // Bit Hacks //
 ///////////////

@@ -1,6 +1,6 @@
 use crate::{
-    factorial, is_sorted_by, is_total_order_by, multiset::MultisetU4x8, num_multisets,
-    u32_any_nibs_between,
+    factorial, is_partitioned, is_sorted_by, is_total_order_by, multiset::MultisetU4x8,
+    num_multisets, u32_any_nibs_between,
 };
 use approx::relative_eq;
 use std::{
@@ -10,7 +10,7 @@ use std::{
     ops::Range,
     str::FromStr,
 };
-use tinyvec::ArrayVec;
+// use tinyvec::ArrayVec;
 
 #[cfg(test)]
 use proptest::{
@@ -173,7 +173,7 @@ impl DieKindCounts {
 
     pub fn from_dice_vec(dice: DiceVec) -> Self {
         let counts = Self(MultisetU4x8::from_iter_flat(
-            dice.into_iter().map(Die::kind_idx),
+            dice.into_iter_no_sentinel().map(Die::kind_idx),
         ));
         debug_assert!(counts.invariant());
         counts
@@ -190,8 +190,12 @@ impl DieKindCounts {
 
     fn spread_face(&self, face: u8) -> DiceVec {
         let mut dice = DiceVec::new();
+        let mut len = 0;
         for (kind_idx, nkind) in self.into_iter() {
-            dice.push_n_die(Die::new(face, kind_idx), nkind);
+            for i in 0..nkind {
+                dice.set_die(len + i, Die::new(face, kind_idx));
+            }
+            len += nkind;
         }
         dice
     }
@@ -218,8 +222,9 @@ impl DieKindCounts {
         fn rec(
             cb: &mut impl FnMut(DiceVec),
             acc: DiceVec,
-            kind_counts: DieKindCounts,
+            acc_len: u8,
             current_face: u8,
+            kind_counts: DieKindCounts,
         ) {
             let ndice = kind_counts.ndice();
 
@@ -238,21 +243,22 @@ impl DieKindCounts {
 
             // choose how many times we'll repeat this face
             for nface in (0..=ndice).rev() {
+                let new_acc_len = acc_len + nface;
                 // generate `spread_dice multichoose nface` for this iteration
                 for mset in spread_dice.multisets_iter(nface) {
                     let mut new_acc = acc;
-                    new_acc.extend(mset);
+                    new_acc.extend_from(acc_len, mset);
 
                     let mut new_kind_counts = kind_counts;
                     new_kind_counts.sub_counts(DieKindCounts::from_dice_vec(mset));
 
-                    rec(cb, new_acc, new_kind_counts, current_face + 1);
+                    rec(cb, new_acc, new_acc_len, current_face + 1, new_kind_counts);
                 }
             }
         }
 
         let mut out = Vec::with_capacity(self.num_multisets(6) as usize);
-        rec(&mut |dice| out.push(dice), DiceVec::new(), *self, 1);
+        rec(&mut |dice| out.push(dice), DiceVec::new(), 0, 1, *self);
         out
     }
 
@@ -279,14 +285,24 @@ impl Default for Die {
     #[inline]
     fn default() -> Self {
         // TODO(philiphayes): use idx=0 as dummy slot?
-        Self::new(0, 7)
+        Self::sentinel()
     }
 }
 
 impl Die {
     #[inline]
-    pub fn new(face: u8, kind_idx: u8) -> Self {
+    pub const fn new(face: u8, kind_idx: u8) -> Self {
         Self((face << 4) | (kind_idx & 0x0f))
+    }
+
+    #[inline]
+    pub const fn sentinel() -> Self {
+        Self::new(8, 8)
+    }
+
+    #[inline]
+    pub fn is_sentinel(self) -> bool {
+        self == Self::sentinel()
     }
 
     #[inline]
@@ -355,76 +371,25 @@ impl Hash for Die {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 // #[derive(Copy, Clone, Eq)]
-pub struct DiceVec(ArrayVec<[Die; 6]>);
-// pub struct DiceVec([Die; 6]);
+// pub struct DiceVec(ArrayVec<[Die; 6]>);
+pub struct DiceVec([Die; 6]);
 
 impl DiceVec {
     /// A new empty list of dice.
     #[inline]
-    pub fn new() -> Self {
-        Self(ArrayVec::new())
+    pub const fn new() -> Self {
+        Self([Die::sentinel(); 6])
     }
 
-    // #[inline]
-    // fn as_u128(self) -> u128 {
-    //     let d0 = match self.0.get(0) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //     let d1 = match self.0.get(1) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //     let d2 = match self.0.get(2) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //     let d3 = match self.0.get(3) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //     let d4 = match self.0.get(4) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //     let d5 = match self.0.get(5) {
-    //         Some(&x) => x,
-    //         None => Die::default(),
-    //     };
-    //
-    //     let bs: [u8; 16] = [
-    //         0,
-    //         0,
-    //         0,
-    //         0,
-    //         d5.kind as u8,
-    //         d5.face as u8,
-    //         d4.kind as u8,
-    //         d4.face as u8,
-    //         d3.kind as u8,
-    //         d3.face as u8,
-    //         d2.kind as u8,
-    //         d2.face as u8,
-    //         d1.kind as u8,
-    //         d1.face as u8,
-    //         d0.kind as u8,
-    //         d0.face as u8,
-    //     ];
-    //
-    //     u128::from_le_bytes(bs)
-    // }
+    #[inline]
+    fn set_die(&mut self, idx: u8, die: Die) {
+        self.0[idx as usize] = die;
+    }
 
-    // #[cfg(test)]
-    // fn from_rolls(rolls: &[u8]) -> Self {
-    //
-    // }
-
-    // #[inline]
-    // pub fn from_die(die: Die) -> Self {
-    //     let mut dice = Self::new();
-    //     dice.0.push(die);
-    //     dice
-    // }
+    fn invariant(&self) -> bool {
+        is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
+            && is_partitioned(self.0.iter(), |die| !die.is_sentinel())
+    }
 
     #[inline]
     fn from_sorted_iter<T>(iter: T) -> Self
@@ -432,11 +397,21 @@ impl DiceVec {
         T: IntoIterator<Item = Die>,
     {
         let mut dice = Self::new();
-        for die in iter {
-            dice.0.push(die);
+        for (out, inp) in dice.0.iter_mut().zip(iter) {
+            *out = inp;
         }
         debug_assert!(dice.invariant());
         dice
+    }
+
+    #[inline]
+    pub fn into_iter_all(self) -> impl Iterator<Item = Die> {
+        self.0.into_iter()
+    }
+
+    #[inline]
+    pub fn into_iter_no_sentinel(self) -> impl Iterator<Item = Die> {
+        self.into_iter_all().filter(|die| !die.is_sentinel())
     }
 
     // #[inline]
@@ -445,13 +420,47 @@ impl DiceVec {
     // }
 
     #[inline]
-    pub fn len(&self) -> u8 {
-        self.0.len() as u8
+    pub fn len(self) -> u8 {
+        self.0
+            .into_iter()
+            .position(|die| die.is_sentinel())
+            .unwrap_or(6) as u8
     }
 
-    fn invariant(&self) -> bool {
-        is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
+    pub fn from_slice(dice: &mut [Die]) -> Self {
+        dice.sort_unstable();
+        Self::from_sorted_slice(dice)
     }
+
+    pub fn from_sorted_slice(dice: &[Die]) -> Self {
+        let mut dice_vec = Self::new();
+        dice_vec.0[..dice.len()].copy_from_slice(dice);
+        debug_assert!(dice_vec.invariant());
+        dice_vec
+    }
+
+    #[inline]
+    fn extend_from(&mut self, idx: u8, other: Self) {
+        let idx = idx as usize;
+        self.0[idx..6].copy_from_slice(&other.0[0..(6 - idx)]);
+
+        debug_assert!(self.invariant());
+    }
+
+    // pub fn from_sorted_iter(mut iter: impl Iterator<Item = Die>) -> Self {
+    //     let mut out = Self::new();
+    //     let mut idx = 0;
+    //
+    //     loop {
+    //         match iter.next() {
+    //             Some(die) => {
+    //                 out.set_die(idx, die);
+    //                 idx += 1;
+    //             }
+    //             None => return out,
+    //         }
+    //     }
+    // }
 
     // fn get_face_count(&self, face: u8) -> u8 {
     //     self.0
@@ -472,19 +481,20 @@ impl DiceVec {
     //     self.0[idx as usize]
     // }
 
-    fn add_die(&mut self, die: Die) {
-        let idx = self.0.partition_point(|&other| other < die);
-        self.0.insert(idx, die);
-        debug_assert!(self.invariant());
-    }
+    // fn add_die(&mut self, die: Die) {
+    //     todo!()
+    //     // let idx = self.0.partition_point(|&other| other < die);
+    //     // self.0.insert(idx, die);
+    //     // debug_assert!(self.invariant());
+    // }
 
-    #[inline]
+    #[cfg(test)]
     fn push_die(&mut self, die: Die) {
-        self.0.push(die);
+        self.set_die(self.len(), die);
         debug_assert!(self.invariant());
     }
 
-    #[inline]
+    #[cfg(test)]
     fn push_n_die(&mut self, die: Die, n: u8) {
         for _ in 0..n {
             self.push_die(die);
@@ -492,52 +502,42 @@ impl DiceVec {
         debug_assert!(self.invariant());
     }
 
-    #[inline]
-    fn extend(&mut self, other: Self) {
-        self.0.extend(other.into_iter());
-        debug_assert!(self.invariant());
-    }
-
     #[cfg(test)]
     fn merge(&self, other: &Self) -> Self {
-        Self::from_sorted_iter(itertools::merge(self.into_iter(), other.into_iter()))
+        Self::from_sorted_iter(itertools::merge(
+            self.into_iter_no_sentinel(),
+            other.into_iter_no_sentinel(),
+        ))
     }
 
     #[inline]
     #[cfg(test)]
     fn truncate(&mut self, new_len: u8) {
-        self.0.truncate(new_len as usize);
+        self.0[new_len as usize..].fill(Die::sentinel());
     }
-
-    // fn remove_face(self, face: u8) -> Self {
-    //     let without_face =
-    //         Self::from_sorted_iter(self.0.into_iter().filter(|die| die.face != face));
-    //     debug_assert!(without_face.invariant());
-    //     without_face
-    // }
 
     #[cfg(test)]
     fn split_next_die(mut self) -> (Self, Self) {
         let die = self.0[0];
-        let split_idx = self.0.partition_point(|&other| other == die);
-        let other_set = self.0.split_off(split_idx);
-        (self, Self(other_set))
+        let split_idx = self.0.partition_point(|&other| other == die) as u8;
+        let other = self.copy_slice(split_idx..6);
+        self.truncate(split_idx);
+        (self, other)
     }
 
     /// Only return unique dice.
     #[cfg(test)]
     fn unique_dice(&self) -> Self {
-        let (_prev, unique) = self.into_iter().fold(
-            (Die::default(), DiceVec::new()),
-            |(prev, mut unique), curr| {
-                if prev != curr {
-                    unique.0.push(curr);
-                }
-                (curr, unique)
-            },
-        );
-        debug_assert!(unique.invariant());
-        unique
+        let mut out = Self::new();
+        let mut idx = 0;
+        for die in self.into_iter_no_sentinel() {
+            if !out.0.contains(&die) {
+                out.set_die(idx, die);
+                idx += 1;
+            }
+        }
+        debug_assert!(out.invariant());
+        out
     }
 
     #[inline]
@@ -559,8 +559,8 @@ impl DiceVec {
             )
     }
 
-    fn die_with_kind_idx(&self, kind_idx: u8) -> DiceVec {
-        Self::from_sorted_iter(self.into_iter().filter(|die| die.kind_idx() == kind_idx))
+    fn die_with_kind_idx(self, kind_idx: u8) -> DiceVec {
+        Self::from_sorted_iter(self.0.into_iter().filter(|die| die.kind_idx() == kind_idx))
     }
 
     fn group_by_die_kind_idx(self) -> impl Iterator<Item = (u8, DiceVec)> {
@@ -606,19 +606,15 @@ impl DiceVec {
     }
 
     #[inline]
-    fn copy_slice(&self, range: Range<u8>) -> Self {
+    fn copy_slice(self, range: Range<u8>) -> Self {
         let start = range.start as usize;
         let end = range.end as usize;
-        let len = end - start;
+        let len = (range.end - range.start) as usize;
 
-        let mut arr = ArrayVec::new();
-        arr.grab_spare_slice_mut()[0..len].copy_from_slice(&self.0[start..end]);
-        arr.set_len(len);
-
-        let new = Self(arr);
-        debug_assert!(new.invariant());
-
-        new
+        let mut out = Self::new();
+        out.0[0..len].copy_from_slice(&self.0[start..end]);
+        debug_assert!(out.invariant());
+        out
     }
 }
 
@@ -670,28 +666,28 @@ impl DiceVec {
 //     }
 // }
 
-impl IntoIterator for DiceVec {
-    type Item = Die;
-    type IntoIter = tinyvec::ArrayVecIterator<[Die; 6]>;
+// impl IntoIterator for DiceVec {
+//     type Item = Die;
+//     type IntoIter = tinyvec::ArrayVecIterator<[Die; 6]>;
+//
+//     #[inline]
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.0.into_iter()
+//     }
+// }
 
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl FromIterator<Die> for DiceVec {
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = Die>,
-    {
-        let mut dice = DiceVec::new();
-        for die in iter.into_iter() {
-            dice.add_die(die)
-        }
-        dice
-    }
-}
+// impl FromIterator<Die> for DiceVec {
+//     fn from_iter<T>(iter: T) -> Self
+//     where
+//         T: IntoIterator<Item = Die>,
+//     {
+//         let mut dice = DiceVec::new();
+//         for die in iter.into_iter() {
+//             dice.add_die(die)
+//         }
+//         dice
+//     }
+// }
 
 /// An `Iterator` over all k-combinations of the multiset defined by a given
 /// `DiceVec`.
@@ -806,7 +802,7 @@ impl DiceCounts {
     }
 
     pub fn from_dice_vec(dice_vec: DiceVec) -> Self {
-        dice_vec.into_iter().collect()
+        dice_vec.into_iter_no_sentinel().collect()
     }
 
     /// A convenience function for constructing a `DiceCounts` set from an unordered
@@ -1315,7 +1311,7 @@ mod test {
 
             // if ndice == 1 we can just return each unique element
             if ndice == 1 {
-                for die in left.unique_dice() {
+                for die in left.unique_dice().into_iter_no_sentinel() {
                     let mut new_acc = acc;
                     new_acc.push_die(die);
                     cb(new_acc);
