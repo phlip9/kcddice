@@ -140,7 +140,11 @@ OPTIONS:
         table.add_heading("");
         table.add_row(row!(
             "action value cache size",
-            ctxt.action_value_cache().cache_size().to_string(),
+            format!(
+                "{} ({})",
+                ctxt.action_value_cache().cache_size(),
+                ctxt.action_value_cache().cache_size_bytes()
+            ),
             "",
             ""
         ));
@@ -158,7 +162,11 @@ OPTIONS:
         table.add_heading("");
         table.add_row(row!(
             "actions cache size",
-            ctxt.actions_cache().cache_size().to_string(),
+            format!(
+                "{} ({})",
+                ctxt.actions_cache().cache_size(),
+                ctxt.actions_cache().cache_size_bytes()
+            ),
             "",
             ""
         ));
@@ -256,7 +264,11 @@ USAGE:
         table.add_heading("");
         table.add_row(row!(
             "score distr cache size",
-            ctxt.score_distr_cache().cache_size().to_string()
+            format!(
+                "{} ({})",
+                ctxt.score_distr_cache().cache_size(),
+                ctxt.score_distr_cache().cache_size_bytes()
+            )
         ));
         table.add_row(row!(
             "score distr cache hit rate",
@@ -270,7 +282,11 @@ USAGE:
         table.add_heading("");
         table.add_row(row!(
             "actions cache size",
-            ctxt.actions_cache().cache_size().to_string()
+            format!(
+                "{} ({})",
+                ctxt.actions_cache().cache_size(),
+                ctxt.actions_cache().cache_size_bytes()
+            ),
         ));
         table.add_row(row!(
             "actions cache hit rate",

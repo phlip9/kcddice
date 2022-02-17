@@ -1,7 +1,8 @@
 use crate::{
     dice::{DiceVec, DieKindCounts, DieKindTable},
-    total_cmp_f64,
+    total_cmp_f64, TotalSize,
 };
+use bytesize::ByteSize;
 use ndarray::{s, Array1, Array2, ArrayView1};
 use std::{borrow::Borrow, cell::Cell, cmp, collections::HashMap, hash::Hash, rc::Rc};
 
@@ -70,6 +71,26 @@ where
     }
 }
 
+impl<K, V> TotalSize for Cache<K, V>
+where
+    K: TotalSize,
+    V: TotalSize,
+{
+    fn total_size(&self) -> usize {
+        self.store.total_size() + self.hits.total_size() + self.misses.total_size()
+    }
+}
+
+impl<K, V> Cache<K, V>
+where
+    K: TotalSize,
+    V: TotalSize,
+{
+    pub fn cache_size_bytes(&self) -> ByteSize {
+        ByteSize(self.total_size() as u64)
+    }
+}
+
 ////////////
 // Action //
 ////////////
@@ -88,6 +109,8 @@ pub enum Action {
     /// rest. The held dice score is added to their current round total.
     Roll(DiceVec),
 }
+
+impl_total_size_static!(Action);
 
 ////////////////////////
 // Evaluation Context //
@@ -208,6 +231,8 @@ pub struct NormalizedStateAction {
     /// The set of dice available to reroll after applying the action.
     pub dice_left: DieKindCounts,
 }
+
+impl_total_size_static!(NormalizedStateAction);
 
 impl NormalizedStateAction {
     pub fn new(my_round_total: u16, target_score: u16, dice_left: DieKindCounts) -> Self {
@@ -566,6 +591,12 @@ impl ScorePMF {
 
     pub fn total_mass(&self) -> f64 {
         self.0.values().sum()
+    }
+}
+
+impl TotalSize for ScorePMF {
+    fn total_size(&self) -> usize {
+        self.0.total_size()
     }
 }
 

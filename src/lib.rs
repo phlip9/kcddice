@@ -28,7 +28,7 @@ mod multiset;
 mod parse;
 mod search;
 
-use std::cmp;
+use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
 
 pub(crate) const DEFAULT_TARGET_SCORE: u16 = 4000;
 
@@ -268,6 +268,83 @@ pub(crate) fn u64_trailing_byte_idx_lt(n: u8, y: u64) -> Option<u8> {
         Some(u64_trailing_zero_bytes(mask_0x80) as u8)
     } else {
         None
+    }
+}
+
+/////////////////////
+// TotalSize trait //
+/////////////////////
+
+/// A trait for computing the total size of a data structure in memory. That means
+/// not just the size on the stack, but also the total size of any owned resources.
+pub trait TotalSize {
+    /// Types whose total size is known statically, like a `u32`, can return a
+    /// constant here. Unsized types or types that contain variable-size resources
+    /// must return `None` here.
+    fn static_size() -> Option<usize> {
+        None
+    }
+    fn total_size(&self) -> usize {
+        Self::static_size().unwrap()
+    }
+}
+
+impl_total_size_static!(u16, u32, f64);
+
+impl<T> TotalSize for Vec<T>
+where
+    T: TotalSize,
+{
+    fn total_size(&self) -> usize {
+        let inner_size = if let Some(elt_size) = T::static_size() {
+            self.len() * elt_size
+        } else {
+            self.iter()
+                .map(|x| x.total_size())
+                .sum()
+        };
+        std::mem::size_of::<Self>() + inner_size
+    }
+}
+
+impl<T> TotalSize for Rc<T>
+where
+    T: TotalSize,
+{
+    fn total_size(&self) -> usize {
+        if let Some(size) = Self::static_size() {
+            size
+        } else {
+            std::mem::size_of::<Self>() + self.deref().total_size()
+        }
+    }
+    fn static_size() -> Option<usize> {
+        T::static_size().map(|inner_size| inner_size + std::mem::size_of::<Self>())
+    }
+}
+
+impl<K, V> TotalSize for HashMap<K, V>
+where
+    K: TotalSize,
+    V: TotalSize,
+{
+    fn total_size(&self) -> usize {
+        let inner_size = match (K::static_size(), V::static_size()) {
+            (Some(size_k), Some(size_v)) => self.len() * (size_k + size_v),
+            (Some(size_k), None) => {
+                (self.len() * size_k)
+                    + self.values().map(|v| v.total_size()).sum::<usize>()
+            }
+            (None, Some(size_v)) => {
+                (self.len() * size_v)
+                    + self.keys().map(|k| k.total_size()).sum::<usize>()
+            }
+            (None, None) => self
+                .iter()
+                .map(|(k, v)| k.total_size() + v.total_size())
+                .sum(),
+        };
+        std::mem::size_of::<Self>() + inner_size
     }
 }
 

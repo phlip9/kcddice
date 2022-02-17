@@ -391,6 +391,8 @@ const _: [(); 1] = [(); std::mem::size_of::<Die>()];
 #[derive(Copy, Clone, Debug)]
 pub struct DiceVec(u64);
 
+impl_total_size_static!(DiceVec);
+
 impl DiceVec {
     /// A new empty list of dice.
     #[inline]
