@@ -197,6 +197,80 @@ pub(crate) fn u32_sum_all_nibs(x: u32) -> u32 {
     z >> 24
 }
 
+/// Return the number of leading bytes == 0x00
+#[inline]
+pub(crate) fn u64_leading_zero_bytes(x: u64) -> u32 {
+    x.leading_zeros() >> 3
+}
+
+/// Return the number of trailing bytes == 0x00
+#[inline]
+pub(crate) fn u64_trailing_zero_bytes(x: u64) -> u32 {
+    x.trailing_zeros() >> 3
+}
+
+/// Do an element-wise less-than comparison across each byte in `x` and `y`.
+/// Returns a mask where each byte is `0x80` if `bx < by` and `0x00` otherwise.
+/// Requires that each byte in `x` is in the range `0 <= bx <= 0x7f (127)`.
+#[inline]
+pub(crate) fn u64_elementwise_bytes_lt(x: u64, y: u64) -> u64 {
+    // ensure no elements in x are > 0x7f
+    debug_assert!((x & 0x8080_8080_8080_8080) == 0);
+
+    let a = 0x7f7f_7f7f_7f7f_7f7f_u64;
+    let b = 0x8080_8080_8080_8080_u64;
+    let c = a - x;
+
+    // a = (0x7f << 56) + (0x7f << 48) + .. + (0x7f << 0)
+    // x = (b7 << 56) + (b6 << 48) + .. + (b0 << 0)
+    // c = ((0x7f - b7) << 56) + .. + ((0x7f - b0) << 0)  iff. bi <= 0x7f forall i
+
+    // (((by & 0x7f) + (0x7f - bx) > 0x7f) || (by > 0x7f)
+    // by' + 0x7f - bx > 0x7f
+    // by' - bx > 0x7f
+    // (by' > bx) || (by > 0x7f)
+
+    // convert 0x80 mask z to 0xff mask
+    // (z / 0x80) * 0xff (convert 0x80 -> 0x01 mask, then 0x01 -> 0xff mask)
+    // = (z >> 7) * 0xff (replace div with shr)
+
+    ((y & a).wrapping_add(c) | y) & b
+}
+
+/// Given two u64's, `x` and `y`, where all bytes `bx` in `x` are in the range
+/// `0 <= bx <= 0x7f (127)`, return the _byte index_ (i.e., idx = 0 = least
+/// significant byte, idx = 7 = most-significant byte)  of the first leading byte
+/// `by` in `y` where `by > bx`. (i.e., starting from the most-significant byte).
+///
+/// Returns `None` if there are no bytes in `y` greater than their corresponding
+/// byte in `x`.
+#[inline]
+pub(crate) fn u64_leading_byte_idx_lt(x: u64, y: u64) -> Option<u8> {
+    let mask_0x80 = u64_elementwise_bytes_lt(x, y);
+
+    if mask_0x80 != 0 {
+        Some((7 - u64_leading_zero_bytes(mask_0x80)) as u8)
+    } else {
+        None
+    }
+}
+
+/// Return the _byte index_ of the first _trailing_ byte `by` in `y` where
+/// `n < by`.
+#[inline]
+pub(crate) fn u64_trailing_byte_idx_lt(n: u8, y: u64) -> Option<u8> {
+    // broadcast byte `n` across all bytes
+    let x = 0x0101_0101_0101_0101_u64 * (n as u64);
+    // set 0x80 in all bytes where `n < by`
+    let mask_0x80 = u64_elementwise_bytes_lt(x, y);
+
+    if mask_0x80 != 0 {
+        Some(u64_trailing_zero_bytes(mask_0x80) as u8)
+    } else {
+        None
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -215,6 +289,10 @@ mod test {
         for n in 0..NUM_FACTORIALS as u32 {
             assert_eq!(factorial_ref(n), factorial(n));
         }
+    }
+
+    fn niters(n: u32) -> ProptestConfig {
+        ProptestConfig::with_cases(n)
     }
 
     /// spread `x` into an array of nibbles.
@@ -266,7 +344,7 @@ mod test {
 
     // Efficiently generate combinations of mask bits that match a "`meta_mask`"
     // (by match I mean `meta_mask & mask == mask`).
-    fn arb_mask(meta_mask: u32) -> impl Strategy<Value = u32> {
+    fn arb_mask_u32(meta_mask: u32) -> impl Strategy<Value = u32> {
         let nmasks: u32 = 1 << meta_mask.count_ones();
 
         (0..=nmasks).prop_map(move |mask_idx| pdep32_fallback(mask_idx, meta_mask))
@@ -277,8 +355,7 @@ mod test {
         assert!(u32_any_nibs_between(0x1234_5678, 0x1010_1010, 0, 3));
         assert!(!u32_any_nibs_between(0x1234_5678, 0x0011_1011, 0, 3));
 
-        let cfg = ProptestConfig::with_cases(5000);
-        proptest!(cfg, |(x in any::<u32>(), mask in arb_mask(0x1111_1111), m in (0u32..=7), n in (0u32..=8))| {
+        proptest!(niters(2000), |(x in any::<u32>(), mask in arb_mask_u32(0x1111_1111), m in (0u32..=7), n in (0u32..=8))| {
             assert_eq!(u32_any_nibs_between_ref(x, mask, m, n), u32_any_nibs_between(x, mask, m, n));
         });
     }
@@ -289,10 +366,77 @@ mod test {
 
     #[test]
     fn test_u32_sum_all_nibs() {
-        let cfg = ProptestConfig::with_cases(5000);
-        proptest!(cfg, |(x in any::<u32>())| {
+        proptest!(niters(2000), |(x in any::<u32>())| {
             prop_assert_eq!(u32_sum_all_nibs_ref(x), u32_sum_all_nibs(x));
  
+        });
+    }
+
+    fn u64_leading_zero_bytes_ref(x: u64) -> u32 {
+        x.to_be_bytes().into_iter().take_while(|&b| b == 0).count() as u32
+    }
+
+    #[test]
+    fn test_u64_leading_zero_bytes() {
+        proptest!(niters(2000), |(x in any::<u64>())| {
+            prop_assert_eq!(u64_leading_zero_bytes_ref(x), u64_leading_zero_bytes(x));
+        });
+    }
+
+    fn u64_elementwise_bytes_lt_ref(x: u64, y: u64) -> u64 {
+        assert!(x & 0x8080_8080_8080_8080_u64 == 0);
+        let bytes = x.to_le_bytes()
+            .into_iter()
+            .zip(y.to_le_bytes().into_iter())
+            .map(|(bx, by)| if bx < by { 0x80_u8 } else { 0x00_u8 })
+            .collect::<Vec<_>>();
+        u64::from_le_bytes(<[u8; 8]>::try_from(&bytes[..]).unwrap())
+    }
+
+    #[test]
+    fn test_u64_elementwise_bytes_lt() {
+        proptest!(niters(2000), |(x in any::<u64>(), y in any::<u64>())| {
+            let x = x & 0x7f7f_7f7f_7f7f_7f7f_u64;
+            prop_assert_eq!(
+                u64_elementwise_bytes_lt_ref(x, y),
+                u64_elementwise_bytes_lt(x, y)
+            );
+        });
+    }
+
+    fn u64_leading_byte_idx_lt_ref(x: u64, y: u64) -> Option<u8> {
+        x.to_le_bytes().into_iter()
+            .zip(y.to_le_bytes().into_iter())
+            .rposition(|(bx, by)| bx < by)
+            .map(|idx| idx as u8)
+    }
+
+    #[test]
+    fn test_u64_leading_byte_idx_lt() {
+        proptest!(niters(2000), |(x in any::<u64>(), y in any::<u64>())| {
+            let x = x & 0x7f7f_7f7f_7f7f_7f7f_u64;
+            prop_assert_eq!(
+                u64_leading_byte_idx_lt_ref(x, y),
+                u64_leading_byte_idx_lt(x, y)
+            );
+        });
+    }
+
+    fn u64_trailing_byte_idx_lt_ref(n: u8, y: u64) -> Option<u8> {
+        y.to_le_bytes()
+            .into_iter()
+            .position(|by| n < by)
+            .map(|idx| idx as u8)
+    }
+
+    #[test]
+    fn test_u64_trailing_byte_idx_lt() {
+        proptest!(niters(2000), |(n in (0_u8..=127), y in any::<u64>())| {
+            // let x = x & 0x7f7f_7f7f_7f7f_7f7f_u64;
+            prop_assert_eq!(
+                u64_trailing_byte_idx_lt_ref(n, y),
+                u64_trailing_byte_idx_lt(n, y)
+            );
         });
     }
 }

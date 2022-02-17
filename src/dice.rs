@@ -1,21 +1,21 @@
 use crate::{
     factorial, is_partitioned, is_sorted_by, is_total_order_by, multiset::MultisetU4x8,
-    num_multisets, u32_any_nibs_between,
+    num_multisets, u32_any_nibs_between, u64_leading_byte_idx_lt, u64_leading_zero_bytes,
+    u64_trailing_byte_idx_lt,
 };
 use approx::relative_eq;
+use claim::{debug_assert_le, debug_assert_lt};
+#[cfg(test)]
+use proptest::{
+    arbitrary::Arbitrary,
+    strategy::{BoxedStrategy, Strategy},
+};
 use std::{
     cmp, fmt,
     hash::{Hash, Hasher},
     iter::FusedIterator,
     ops::Range,
     str::FromStr,
-};
-// use tinyvec::ArrayVec;
-
-#[cfg(test)]
-use proptest::{
-    arbitrary::Arbitrary,
-    strategy::{BoxedStrategy, Strategy},
 };
 
 // TODO(philiphayes): implement jokers/devils
@@ -246,8 +246,7 @@ impl DieKindCounts {
                 let new_acc_len = acc_len + nface;
                 // generate `spread_dice multichoose nface` for this iteration
                 for mset in spread_dice.multisets_iter(nface) {
-                    let mut new_acc = acc;
-                    new_acc.extend_from(acc_len, mset);
+                    let new_acc = acc.extended_from(acc_len, mset);
 
                     let mut new_kind_counts = kind_counts;
                     new_kind_counts.sub_counts(DieKindCounts::from_dice_vec(mset));
@@ -278,13 +277,13 @@ impl FromIterator<(u8, u8)> for DieKindCounts {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq)]
+#[derive(Copy, Clone, Eq)]
+#[repr(transparent)]
 pub struct Die(u8);
 
 impl Default for Die {
     #[inline]
     fn default() -> Self {
-        // TODO(philiphayes): use idx=0 as dummy slot?
         Self::sentinel()
     }
 }
@@ -297,7 +296,7 @@ impl Die {
 
     #[inline]
     pub const fn sentinel() -> Self {
-        Self::new(8, 8)
+        Self(0)
     }
 
     #[inline]
@@ -311,6 +310,11 @@ impl Die {
     }
 
     #[inline]
+    fn from_u8(inner: u8) -> Self {
+        Self(inner)
+    }
+
+    #[inline]
     pub fn face(self) -> u8 {
         self.0 >> 4
     }
@@ -319,10 +323,12 @@ impl Die {
     pub fn kind_idx(self) -> u8 {
         self.0 & 0x0f
     }
+}
 
-    // fn p_die(self) -> f64 {
-    //     self.kind.die_distr().p_face(self.face)
-    // }
+impl fmt::Debug for Die {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {})", self.face(), self.kind_idx())
+    }
 }
 
 impl cmp::PartialEq for Die {
@@ -369,26 +375,98 @@ impl Hash for Die {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// #[derive(Copy, Clone, Eq)]
-// pub struct DiceVec(ArrayVec<[Die; 6]>);
-pub struct DiceVec([Die; 6]);
+// ensure size_of(Die) == 1
+const _: [(); 1] = [(); std::mem::size_of::<Die>()];
+
+/// A list of `Die`s packed into a `u64`. The layout is `0x0000_d5d4_d3d2_d1d0`,
+/// where `di` is the i'th `Die` in the list in byte representation.
+///
+/// The packed `u64` works somewhat like a C-string, with upper bytes in
+/// byte-indexes >= `len(dice)` set to the sentinel value, `0x00 == Die::sentinel()`.
+///
+/// This representation has the advantage of letting us operate on whole `DiceVec`s
+/// without iteration or branches in many cases by using lots of ugly bit-twiddling
+/// hacks : )
+#[repr(transparent)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiceVec(u64);
 
 impl DiceVec {
     /// A new empty list of dice.
     #[inline]
     pub const fn new() -> Self {
-        Self([Die::sentinel(); 6])
+        Self::from_array8([Die::sentinel(); 8])
+    }
+
+    #[inline]
+    const fn as_u64(self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    const fn from_array8(arr: [Die; 8]) -> Self {
+        // SAFETY: Die is #[repr(transparent)] and size_of::<Die>() == 1
+        //         ==> mem::transmute is safe here.
+        let arr: [u8; 8] = unsafe { std::mem::transmute(arr) };
+        Self(u64::from_le_bytes(arr))
+        // TODO(philiphayes): const assertion?
+    }
+
+    #[inline]
+    const fn into_array8(self) -> [Die; 8] {
+        // SAFETY: Die is #[repr(transparent)] and size_of::<Die>() == 1
+        //         ==> mem::transmute is safe here.
+        unsafe { std::mem::transmute(self.0.to_le_bytes()) }
+    }
+
+    #[inline]
+    const fn from_array6(arr: [Die; 6]) -> Self {
+        Self::from_array8([
+            arr[0],
+            arr[1],
+            arr[2],
+            arr[3],
+            arr[4],
+            arr[5],
+            Die::sentinel(),
+            Die::sentinel(),
+        ])
+    }
+
+    #[inline]
+    const fn into_array6(self) -> [Die; 6] {
+        let arr = self.into_array8();
+        [arr[0], arr[1], arr[2], arr[3], arr[4], arr[5]]
     }
 
     #[inline]
     fn set_die(&mut self, idx: u8, die: Die) {
-        self.0[idx as usize] = die;
+        debug_assert_lt!(idx, 8);
+
+        let idx = idx as u32;
+        let shift = 8 * idx;
+
+        self.0 = (self.0 & !(0xff << shift)) | ((die.as_u8() as u64) << shift);
+
+        debug_assert!(self.invariant());
+    }
+
+    #[inline]
+    fn get_die(self, idx: u8) -> Die {
+        debug_assert_lt!(idx, 8);
+
+        let idx = idx as u32;
+        let shift = 8 * idx;
+
+        Die::from_u8(((self.0 >> shift) & 0xff) as u8)
     }
 
     fn invariant(&self) -> bool {
-        is_sorted_by(self.0.iter(), |d1, d2| Some(d1.cmp(d2)))
-            && is_partitioned(self.0.iter(), |die| !die.is_sentinel())
+        is_sorted_by(self.into_iter_no_sentinel(), |d1, d2| Some(d1.cmp(d2)))
+            && is_partitioned(self.into_iter_all(), |die| !die.is_sentinel())
+            && self.get_die(6).is_sentinel()
+            && self.get_die(7).is_sentinel()
+            && self.len() <= 6
     }
 
     #[inline]
@@ -396,35 +474,32 @@ impl DiceVec {
     where
         T: IntoIterator<Item = Die>,
     {
-        let mut dice = Self::new();
-        for (out, inp) in dice.0.iter_mut().zip(iter) {
-            *out = inp;
-        }
-        debug_assert!(dice.invariant());
-        dice
+        let dice_vec = Self(
+            (0..8)
+                .zip(iter)
+                .map(|(idx, die)| (die.as_u8() as u64) << (8 * idx))
+                .fold(0, |x, y| (x | y)),
+        );
+        debug_assert!(dice_vec.invariant());
+        dice_vec
     }
 
     #[inline]
-    pub fn into_iter_all(self) -> impl Iterator<Item = Die> {
-        self.0.into_iter()
+    pub fn into_iter_all(
+        self,
+    ) -> impl Iterator<Item = Die> + ExactSizeIterator + DoubleEndedIterator {
+        self.into_array6().into_iter()
     }
 
     #[inline]
     pub fn into_iter_no_sentinel(self) -> impl Iterator<Item = Die> {
-        self.into_iter_all().filter(|die| !die.is_sentinel())
+        // self.into_iter_all().filter(|die| !die.is_sentinel())
+        U64NonZeroBytesIter::new(self.0).map(Die::from_u8)
     }
-
-    // #[inline]
-    // pub fn is_empty(&self) -> bool {
-    //     self.0.is_empty()
-    // }
 
     #[inline]
     pub fn len(self) -> u8 {
-        self.0
-            .into_iter()
-            .position(|die| die.is_sentinel())
-            .unwrap_or(6) as u8
+        8 - (u64_leading_zero_bytes(self.0) as u8)
     }
 
     pub fn from_slice(dice: &mut [Die]) -> Self {
@@ -433,60 +508,35 @@ impl DiceVec {
     }
 
     pub fn from_sorted_slice(dice: &[Die]) -> Self {
-        let mut dice_vec = Self::new();
-        dice_vec.0[..dice.len()].copy_from_slice(dice);
+        let mut arr = Self::new().into_array6();
+        arr[..dice.len()].copy_from_slice(dice);
+
+        let dice_vec = Self::from_array6(arr);
         debug_assert!(dice_vec.invariant());
         dice_vec
     }
 
     #[inline]
-    fn extend_from(&mut self, idx: u8, other: Self) {
-        let idx = idx as usize;
-        self.0[idx..6].copy_from_slice(&other.0[0..(6 - idx)]);
+    fn extended_from(self, idx: u8, other: Self) -> Self {
+        debug_assert_lt!(idx, 8);
+        debug_assert_eq!(self.len(), idx);
 
-        debug_assert!(self.invariant());
+        let out = Self(self.0 | other.0 << (8 * (idx as u32)));
+
+        debug_assert!(out.invariant());
+        out
     }
 
-    // pub fn from_sorted_iter(mut iter: impl Iterator<Item = Die>) -> Self {
-    //     let mut out = Self::new();
-    //     let mut idx = 0;
-    //
-    //     loop {
-    //         match iter.next() {
-    //             Some(die) => {
-    //                 out.set_die(idx, die);
-    //                 idx += 1;
-    //             }
-    //             None => return out,
-    //         }
-    //     }
-    // }
+    #[inline]
+    fn truncated(self, new_len: u8) -> Self {
+        debug_assert_le!(new_len, 6);
 
-    // fn get_face_count(&self, face: u8) -> u8 {
-    //     self.0
-    //         .iter()
-    //         .map(|die| if die.face == face { 1 } else { 0 })
-    //         .sum()
-    // }
+        let out = Self(self.0 & !(0xffff_ffff_ffff_ffff_u64 << (8 * new_len)));
 
-    // fn get_die_count(&self, die: Die) -> u8 {
-    //     self.0
-    //         .iter()
-    //         .map(|&other| if other == die { 1 } else { 0 })
-    //         .sum()
-    // }
-
-    // #[inline]
-    // fn get_die(self, idx: usize) -> Die {
-    //     self.0[idx as usize]
-    // }
-
-    // fn add_die(&mut self, die: Die) {
-    //     todo!()
-    //     // let idx = self.0.partition_point(|&other| other < die);
-    //     // self.0.insert(idx, die);
-    //     // debug_assert!(self.invariant());
-    // }
+        debug_assert_eq!(out.len(), cmp::min(self.len(), new_len));
+        debug_assert!(out.invariant());
+        out
+    }
 
     #[cfg(test)]
     fn push_die(&mut self, die: Die) {
@@ -510,19 +560,11 @@ impl DiceVec {
         ))
     }
 
-    #[inline]
     #[cfg(test)]
-    fn truncate(&mut self, new_len: u8) {
-        self.0[new_len as usize..].fill(Die::sentinel());
-    }
-
-    #[cfg(test)]
-    fn split_next_die(mut self) -> (Self, Self) {
-        let die = self.0[0];
-        let split_idx = self.0.partition_point(|&other| other == die) as u8;
-        let other = self.copy_slice(split_idx..6);
-        self.truncate(split_idx);
-        (self, other)
+    fn split_next_die(self) -> (Self, Self) {
+        let die = self.get_die(0);
+        let split_idx = self.into_array6().partition_point(|&other| other == die) as u8;
+        (self.truncated(split_idx), self.select_range(split_idx..6))
     }
 
     /// Only return unique dice.
@@ -531,7 +573,7 @@ impl DiceVec {
         let mut out = Self::new();
         let mut idx = 0;
         for die in self.into_iter_no_sentinel() {
-            if !out.0.contains(&die) {
+            if !out.into_array6().contains(&die) {
                 out.set_die(idx, die);
                 idx += 1;
             }
@@ -560,7 +602,10 @@ impl DiceVec {
     }
 
     fn die_with_kind_idx(self, kind_idx: u8) -> DiceVec {
-        Self::from_sorted_iter(self.0.into_iter().filter(|die| die.kind_idx() == kind_idx))
+        Self::from_sorted_iter(
+            self.into_iter_no_sentinel()
+                .filter(|die| die.kind_idx() == kind_idx),
+        )
     }
 
     fn group_by_die_kind_idx(self) -> impl Iterator<Item = (u8, DiceVec)> {
@@ -606,88 +651,99 @@ impl DiceVec {
     }
 
     #[inline]
-    fn copy_slice(self, range: Range<u8>) -> Self {
-        let start = range.start as usize;
-        let end = range.end as usize;
-        let len = (range.end - range.start) as usize;
+    fn select_range(self, range: Range<u8>) -> Self {
+        let start = range.start as u32;
+        let end = range.end as u32;
+        let len = (end - start) as u32;
 
-        let mut out = Self::new();
-        out.0[0..len].copy_from_slice(&self.0[start..end]);
+        debug_assert_lt!(start, 8);
+        debug_assert_lt!(end, 8);
+
+        let mask = !(0xffff_ffff_ffff_ffff_u64 << (8 * len));
+        let out = Self((self.0 >> (8 * start)) & mask);
+
         debug_assert!(out.invariant());
         out
     }
 }
 
-// impl cmp::PartialEq for DiceVec {
-//     #[inline]
-//     fn eq(&self, other: &Self) -> bool {
-//         self.as_u128().eq(&other.as_u128())
-//     }
-//     #[inline]
-//     fn ne(&self, other: &Self) -> bool {
-//         self.as_u128().ne(&other.as_u128())
-//     }
-// }
-//
-// impl cmp::PartialOrd for DiceVec {
-//     #[inline]
-//     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-//         self.as_u128().partial_cmp(&other.as_u128())
-//     }
-//     #[inline]
-//     fn lt(&self, other: &Self) -> bool {
-//         self.as_u128() < other.as_u128()
-//     }
-//     #[inline]
-//     fn le(&self, other: &Self) -> bool {
-//         self.as_u128() <= other.as_u128()
-//     }
-//     #[inline]
-//     fn gt(&self, other: &Self) -> bool {
-//         self.as_u128() > other.as_u128()
-//     }
-//     #[inline]
-//     fn ge(&self, other: &Self) -> bool {
-//         self.as_u128() >= other.as_u128()
-//     }
-// }
-//
-// impl cmp::Ord for DiceVec {
-//     #[inline]
-//     fn cmp(&self, other: &Self) -> cmp::Ordering {
-//         self.as_u128().cmp(&other.as_u128())
-//     }
-// }
-//
-// impl Hash for DiceVec {
-//     #[inline]
-//     fn hash<H: Hasher>(&self, state: &mut H) {
-//         state.write_u128(self.as_u128())
-//     }
-// }
+impl cmp::PartialEq for DiceVec {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.as_u64().eq(&other.as_u64())
+    }
+}
 
-// impl IntoIterator for DiceVec {
-//     type Item = Die;
-//     type IntoIter = tinyvec::ArrayVecIterator<[Die; 6]>;
-//
-//     #[inline]
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.0.into_iter()
-//     }
-// }
+impl cmp::Eq for DiceVec {}
 
-// impl FromIterator<Die> for DiceVec {
-//     fn from_iter<T>(iter: T) -> Self
-//     where
-//         T: IntoIterator<Item = Die>,
-//     {
-//         let mut dice = DiceVec::new();
-//         for die in iter.into_iter() {
-//             dice.add_die(die)
-//         }
-//         dice
-//     }
-// }
+impl cmp::PartialOrd for DiceVec {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl cmp::Ord for DiceVec {
+    #[inline]
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        // first convert each u64 to big-endian before comparing. this places
+        // the 1st die in the most-significant byte (, and 2nd die in 2nd
+        // most-significant byte, and ...), which makes the default integer
+        // comparison equivalent to a lexicographic array comparison.
+        self.as_u64().to_be().cmp(&other.as_u64().to_be())
+    }
+}
+
+impl Hash for DiceVec {
+    #[inline]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.as_u64())
+    }
+}
+
+/// An `Iterator` over all non-zero bytes in `x`, from the
+/// least-significant byte to the most-significant byte.
+pub struct U64NonZeroBytesIter {
+    x: u64,
+}
+
+impl U64NonZeroBytesIter {
+    #[inline]
+    fn new(x: u64) -> Self {
+        Self { x }
+    }
+}
+
+impl ExactSizeIterator for U64NonZeroBytesIter {
+    #[inline]
+    fn len(&self) -> usize {
+        (8 - u64_leading_zero_bytes(self.x)) as usize
+    }
+}
+
+impl Iterator for U64NonZeroBytesIter {
+    type Item = u8;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let x = self.x;
+        if x != 0 {
+            let next = (x & 0xff) as u8;
+            self.x = x >> u8::BITS;
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl FusedIterator for U64NonZeroBytesIter {}
 
 /// An `Iterator` over all k-combinations of the multiset defined by a given
 /// `DiceVec`.
@@ -711,8 +767,8 @@ impl DiceVecMultisetsIter {
 
         Self {
             mset,
-            last: mset.copy_slice((n - k)..n),
-            comb: mset.copy_slice(0..k),
+            last: mset.select_range((n - k)..n),
+            comb: mset.select_range(0..k),
             k,
             done: false,
         }
@@ -722,17 +778,17 @@ impl DiceVecMultisetsIter {
         // find the rightmost element in `comb` that is less than the "max" value
         // it can have (which is the same as the element in the final combination
         // at the same index)
-        let maybe_next_idx = self
-            .comb
-            .0
-            .iter()
-            .zip(self.last.0.iter())
-            .rposition(|(x, l)| x < l);
+        // let maybe_next_idx = self
+        //     .comb
+        //     .into_iter_all()
+        //     .zip(self.last.into_iter_all())
+        //     .rposition(|(x, l)| x < l);
+        let maybe_next_idx = u64_leading_byte_idx_lt(self.comb.as_u64(), self.last.as_u64());
 
         // if comb == last, then there will be no rightmost element less than the
         // max, so we return None to show that we're done.
         let (i, x) = match maybe_next_idx {
-            Some(i) => (i, self.comb.0[i]),
+            Some(i) => (i, self.comb.get_die(i).as_u8()),
             None => {
                 // comb == last => done!
                 self.done = true;
@@ -742,10 +798,11 @@ impl DiceVecMultisetsIter {
 
         // find the successor element (the next element in the multiset greater
         // than arr[i])
-        let maybe_succ_idx = self.mset.0.iter().position(|y| &x < y);
+        // let maybe_succ_idx = self.mset.into_iter_all().position(|y| x < y);
+        let maybe_succ_idx = u64_trailing_byte_idx_lt(x, self.mset.as_u64());
 
         let j = match maybe_succ_idx {
-            Some(j) => j,
+            Some(j) => j as u8,
             // since we've already checked we're not at the end, it cannot happen
             // that there is no successor.
             None => unreachable!(),
@@ -753,8 +810,10 @@ impl DiceVecMultisetsIter {
 
         // replaces comb[i] with its successor and the remainder with all elements
         // that follow in mset.
-        let k = self.k as usize;
-        self.comb.0[i..k].copy_from_slice(&self.mset.0[j..(j + (k - i))]);
+        self.comb = self
+            .comb
+            .truncated(i)
+            .extended_from(i, self.mset.select_range(j..(j + (self.k - i))));
         debug_assert!(self.comb.invariant());
     }
 }
@@ -1249,7 +1308,7 @@ mod test {
     use super::*;
     use crate::{num_combinations, parse};
     use approx::assert_relative_eq;
-    use proptest::prelude::*;
+    use proptest::{array::uniform8, prelude::*};
     use std::{cmp::min, collections::HashSet};
 
     macro_rules! table {
@@ -1334,7 +1393,7 @@ mod test {
 
             // take next set of identical dice
             let (die_set, left) = left.split_next_die();
-            let die = die_set.0[0];
+            let die = die_set.get_die(0);
             let count = die_set.len();
 
             for to_add in (0..=min(count, ndice)).rev() {
@@ -1434,7 +1493,7 @@ mod test {
 
         // if we only have one die kind, the multisets should match
         for ndice in (1..=6).rev() {
-            dice.truncate(ndice);
+            dice = dice.truncated(ndice);
 
             let mut ref_combs = DiceCounts::all_multisets(ndice).collect::<Vec<_>>();
             ref_combs.sort_unstable();
@@ -1713,5 +1772,84 @@ mod test {
                 epsilon = 1.0e-10
             );
         }
+    }
+
+    fn arb_valid_die() -> impl Strategy<Value = Die> {
+        ((1_u8..=6), (0_u8..=15)).prop_map(|(face, kind_idx)| Die::new(face, kind_idx))
+    }
+
+    fn arb_die() -> impl Strategy<Value = Die> {
+        prop_oneof![
+            1 => Just(Die::sentinel()),
+            1 => arb_valid_die(),
+        ]
+    }
+
+    fn niters(n: u32) -> ProptestConfig {
+        ProptestConfig::with_cases(n)
+    }
+
+    // ensure `Die`'s ordering is the same as the lexicographic ordering, i.e.,
+    // compare faces, then compare kind_idxs.
+    #[test]
+    fn test_die_ord() {
+        #[derive(PartialEq, Eq, PartialOrd, Ord)]
+        struct DieModel {
+            face: u8,
+            kind_idx: u8,
+        }
+
+        proptest!(niters(2000), |(die1 in arb_die(), die2 in arb_die())| {
+            let die_model1 = DieModel {
+                face: die1.face(),
+                kind_idx: die1.kind_idx(),
+            };
+            let die_model2 = DieModel {
+                face: die2.face(),
+                kind_idx: die2.kind_idx(),
+            };
+
+            assert_eq!(die1.eq(&die2), die_model1.eq(&die_model2));
+            assert_eq!(die1.cmp(&die2), die_model1.cmp(&die_model2));
+        });
+    }
+
+    // ensure `DiceVec`'s ordering is the same as the default lexicographic array
+    // ordering.
+    #[test]
+    fn test_dice_vec_ord() {
+        proptest!(niters(2000), |(
+            mut dice1 in uniform8(arb_die()),
+            mut dice2 in uniform8(arb_die()),
+        )| {
+            // a comparator which will ensure all the sentinels in the array
+            // collect at the end.
+            fn cmp_die(d1: &Die, d2: &Die) -> cmp::Ordering {
+                if d1.is_sentinel() && d2.is_sentinel() {
+                    cmp::Ordering::Equal
+                } else if d1.is_sentinel() {
+                    cmp::Ordering::Greater
+                } else if d2.is_sentinel() {
+                    cmp::Ordering::Less
+                } else {
+                    d1.cmp(d2)
+                }
+            }
+
+            dice1.sort_unstable_by(cmp_die);
+            dice2.sort_unstable_by(cmp_die);
+
+            let dice_vec1 = DiceVec::from_array8(dice1);
+            let dice_vec2 = DiceVec::from_array8(dice2);
+
+            assert_eq!(
+                dice1.eq(&dice2),
+                dice_vec1.eq(&dice_vec2),
+            );
+            assert_eq!(
+                dice1.cmp(&dice2),
+                dice_vec1.cmp(&dice_vec2),
+            );
+        });
     }
 }

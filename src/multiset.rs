@@ -84,11 +84,14 @@ impl MultisetU4x8 {
     #[cfg(test)]
     #[inline]
     pub fn set_count(&mut self, idx: u8, count: u8) {
+        let idx = idx as u32;
+        let count = count as u32;
+        let shift = 4 * idx;
+
         debug_assert!((0..8).contains(&idx));
         debug_assert!((0..8).contains(&count));
 
-        self.0 = (self.0 & !(0x0f << (4 * (idx as u32))))
-            + (((count as u32) & 0x0f) << (4 * (idx as u32)));
+        self.0 = (self.0 & !(0x0f << shift)) | ((count & 0x0f) << shift);
     }
 
     pub fn is_superset_of(self, other: Self) -> bool {
