@@ -109,20 +109,6 @@ pub struct Context {
     actions_cache: Cache<DiceVec, Rc<Vec<Action>>>,
     actions_explored: u64,
     game_finished_prunes: Cell<u64>,
-    /// A recursion depth tracker to limit the search depth. Since it appears you
-    /// can actually start a new roll if you score and hold all the dice on the
-    /// board, then the game is no longer finite and isn't guaranteed to terminate.
-    /// This depth limit is then necessary for our search to terminate.
-    depth: u32,
-    depth_max: u32,
-    depth_prunes: Cell<u64>,
-    /// The current joint probability of this evaluation path, i.e., `P(X_1, .., X_n)`
-    /// where `X_i` is the i'th random dice set drawn in this evaluation path.
-    /// We use this to limit searching of super low probability evaluation paths
-    /// (which also tend to explode our branching factor).
-    joint_path_prob: f64,
-    joint_path_prob_min: f64,
-    joint_prob_prunes: Cell<u64>,
 }
 
 impl Context {
@@ -131,16 +117,10 @@ impl Context {
             all_dice,
             kind_table,
             game_finished_prunes: Cell::new(0),
-            depth: 0,
-            depth_max: 30,
-            joint_path_prob: 1.0,
-            joint_path_prob_min: 1.0e-10,
             action_value_cache: Cache::new(),
             score_distr_cache: Cache::new(),
             actions_cache: Cache::new(),
             actions_explored: 0,
-            depth_prunes: Cell::new(0),
-            joint_prob_prunes: Cell::new(0),
         }
     }
 
@@ -155,67 +135,19 @@ impl Context {
     }
 
     #[inline]
-    #[allow(unused)]
-    fn set_depth_max(&mut self, depth_max: u32) -> &mut Self {
-        self.depth_max = depth_max;
-        self
-    }
-
-    #[inline]
-    #[allow(unused)]
-    fn set_joint_prob_min(&mut self, joint_path_prob_min: f64) -> &mut Self {
-        self.joint_path_prob_min = joint_path_prob_min;
-        self
-    }
-
-    #[inline]
-    fn with_next_depth<T>(&mut self, p_roll: f64, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.depth += 1;
-        let pre_joint_prob = self.joint_path_prob;
-        self.joint_path_prob *= p_roll;
-
-        let res = f(self);
-
-        self.depth -= 1;
-        self.joint_path_prob = pre_joint_prob;
-
-        res
-    }
-
-    #[inline]
-    fn depth_prunes(&self) -> u64 {
-        self.depth_prunes.get()
-    }
-
-    #[inline]
     fn game_finished_prunes(&self) -> u64 {
         self.game_finished_prunes.get()
     }
 
     #[inline]
-    fn joint_prob_prunes(&self) -> u64 {
-        self.joint_prob_prunes.get()
-    }
-
-    #[inline]
     fn should_prune(&self, my_round_total: u16, target_score: u16) -> bool {
-        // TODO(philiphayes): is this still necessary?
-        // if self.depth > self.depth_max {
-        //     self.depth_prunes.set(self.depth_prunes() + 1);
-        //     return true;
-        // }
-        //
         if my_round_total >= target_score {
             self.game_finished_prunes
                 .set(self.game_finished_prunes.get() + 1);
-            return true;
+            true
+        } else {
+            false
         }
-        // TODO: is this still necessary?
-        // if self.joint_path_prob < self.joint_path_prob_min {
-        //     self.joint_prob_prunes.set(self.joint_prob_prunes() + 1);
-        //     return true;
-        // }
-        false
     }
 
     fn action_value_cache_mut(&mut self) -> &mut Cache<NormalizedStateAction, f64> {
@@ -243,18 +175,8 @@ impl Context {
     }
 
     #[inline]
-    pub fn depth_prune_rate(&self) -> f64 {
-        (self.depth_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
-    }
-
-    #[inline]
     pub fn game_finished_rate(&self) -> f64 {
         (self.game_finished_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
-    }
-
-    #[inline]
-    pub fn joint_prob_prune_rate(&self) -> f64 {
-        (self.joint_prob_prunes() as f64) / (self.actions_explored() as f64 + 1.0)
     }
 }
 
@@ -389,17 +311,15 @@ impl NormalizedStateAction {
         for (next_state, p_roll) in self.possible_roll_states(&kind_table) {
             // want to maximize expected value; choose action with
             // greatest expected value
-            let best_action_value = ctxt.with_next_depth(p_roll, move |ctxt| {
-                next_state
-                    .actions(ctxt)
-                    .iter()
-                    .map(|&next_action| {
-                        Self::from_state_action(ctxt.all_dice, next_state, next_action)
-                            .expected_value(ctxt)
-                    })
-                    .max_by(total_cmp_f64)
-                    .unwrap_or(0.0)
-            });
+            let best_action_value = next_state
+                .actions(ctxt)
+                .iter()
+                .map(|&next_action| {
+                    Self::from_state_action(ctxt.all_dice, next_state, next_action)
+                        .expected_value(ctxt)
+                })
+                .max_by(total_cmp_f64)
+                .unwrap_or(0.0);
 
             expected_value += p_roll * best_action_value;
         }
@@ -429,18 +349,16 @@ impl NormalizedStateAction {
         let kind_table = ctxt.kind_table;
 
         for (next_state, p_roll) in self.possible_roll_states(&kind_table) {
-            let (_best_exp_value, best_score_distr) = ctxt.with_next_depth(p_roll, move |ctxt| {
-                next_state
-                    .actions(ctxt)
-                    .iter()
-                    .map(|&next_action| {
-                        let distr = Self::from_state_action(ctxt.all_dice, next_state, next_action)
-                            .score_distribution(ctxt);
-                        (distr.expected_value(), distr)
-                    })
-                    .max_by(|(v1, _), (v2, _)| total_cmp_f64(v1, v2))
-                    .unwrap_or_else(|| (0.0, ScorePMF::bust()))
-            });
+            let (_best_exp_value, best_score_distr) = next_state
+                .actions(ctxt)
+                .iter()
+                .map(|&next_action| {
+                    let distr = Self::from_state_action(ctxt.all_dice, next_state, next_action)
+                        .score_distribution(ctxt);
+                    (distr.expected_value(), distr)
+                })
+                .max_by(|(v1, _), (v2, _)| total_cmp_f64(v1, v2))
+                .unwrap_or_else(|| (0.0, ScorePMF::bust()));
 
             score_pmf.add_conditional_distr(p_roll, &best_score_distr);
         }

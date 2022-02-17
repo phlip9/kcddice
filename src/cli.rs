@@ -132,20 +132,8 @@ OPTIONS:
             ""
         ));
         table.add_row(row!(
-            "depth prune rate",
-            format!("{:0.3}", ctxt.depth_prune_rate()),
-            "",
-            ""
-        ));
-        table.add_row(row!(
             "game finished rate",
             format!("{:0.3}", ctxt.game_finished_rate()),
-            "",
-            ""
-        ));
-        table.add_row(row!(
-            "joint prob. prune rate",
-            format!("{:0.3}", ctxt.joint_prob_prune_rate()),
             "",
             ""
         ));
@@ -248,6 +236,7 @@ USAGE:
         }
 
         let mut table = Table::new("{:>}  {:<}");
+        table.add_row(row!("search duration", format!("{:.2?}", search_duration)));
         table.add_row(row!(
             "pmf expected value",
             format!("{:.3}", score_pmf.expected_value())
@@ -256,10 +245,41 @@ USAGE:
             "pmf total mass",
             format!("{}", score_pmf.total_mass())
         ));
-        table.add_row(row!("search duration", format!("{:.2?}", search_duration)));
         table.add_row(row!(
             "actions explored",
             ctxt.actions_explored().to_string()
+        ));
+        table.add_row(row!(
+            "game finished rate",
+            format!("{:0.3}", ctxt.game_finished_rate())
+        ));
+        table.add_heading("");
+        table.add_row(row!(
+            "score distr cache size",
+            ctxt.score_distr_cache().cache_size().to_string()
+        ));
+        table.add_row(row!(
+            "score distr cache hit rate",
+            format!(
+                "{:0.3} (h: {}, m: {})",
+                ctxt.score_distr_cache().cache_hit_rate(),
+                ctxt.score_distr_cache().cache_hits(),
+                ctxt.score_distr_cache().cache_misses()
+            )
+        ));
+        table.add_heading("");
+        table.add_row(row!(
+            "actions cache size",
+            ctxt.actions_cache().cache_size().to_string()
+        ));
+        table.add_row(row!(
+            "actions cache hit rate",
+            format!(
+                "{:0.3} (h: {}, m: {})",
+                ctxt.actions_cache().cache_hit_rate(),
+                ctxt.actions_cache().cache_hits(),
+                ctxt.actions_cache().cache_misses()
+            )
         ));
         eprint!("\n{}", table);
     }
