@@ -131,13 +131,6 @@ OPTIONS:
             "",
             ""
         ));
-        table.add_row(row!("cache size", ctxt.cache_size().to_string(), "", ""));
-        table.add_row(row!(
-            "cache hit rate",
-            format!("{:0.3}", ctxt.cache_hit_rate()),
-            "",
-            ""
-        ));
         table.add_row(row!(
             "depth prune rate",
             format!("{:0.3}", ctxt.depth_prune_rate()),
@@ -153,6 +146,42 @@ OPTIONS:
         table.add_row(row!(
             "joint prob. prune rate",
             format!("{:0.3}", ctxt.joint_prob_prune_rate()),
+            "",
+            ""
+        ));
+        table.add_heading("");
+        table.add_row(row!(
+            "action value cache size",
+            ctxt.action_value_cache().cache_size().to_string(),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "action value cache hit rate",
+            format!(
+                "{:0.3} (h: {}, m: {})",
+                ctxt.action_value_cache().cache_hit_rate(),
+                ctxt.action_value_cache().cache_hits(),
+                ctxt.action_value_cache().cache_misses()
+            ),
+            "",
+            ""
+        ));
+        table.add_heading("");
+        table.add_row(row!(
+            "actions cache size",
+            ctxt.actions_cache().cache_size().to_string(),
+            "",
+            ""
+        ));
+        table.add_row(row!(
+            "actions cache hit rate",
+            format!(
+                "{:0.3} (h: {}, m: {})",
+                ctxt.actions_cache().cache_hit_rate(),
+                ctxt.actions_cache().cache_hits(),
+                ctxt.actions_cache().cache_misses()
+            ),
             "",
             ""
         ));

@@ -3,7 +3,72 @@ use crate::{
     total_cmp_f64,
 };
 use ndarray::{s, Array1, Array2, ArrayView1};
-use std::{cell::Cell, cmp, collections::HashMap};
+use std::{borrow::Borrow, cell::Cell, cmp, collections::HashMap, hash::Hash, rc::Rc};
+
+///////////
+// Cache //
+///////////
+
+pub struct Cache<K, V> {
+    store: HashMap<K, V>,
+    hits: u32,
+    misses: u32,
+}
+
+impl<K, V> Cache<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    fn new() -> Self {
+        Self {
+            store: HashMap::new(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    fn peek_cache<Q>(&mut self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash,
+    {
+        let out = self.store.get(key).cloned();
+        if out.is_some() {
+            self.hits += 1;
+        } else {
+            self.misses += 1;
+        }
+        out
+    }
+
+    fn fill_cache(&mut self, key: K, value: V) -> V {
+        let out = value.clone();
+        self.store.insert(key, value);
+        out
+    }
+
+    pub fn cache_size(&self) -> usize {
+        self.store.len()
+    }
+
+    pub fn cache_hits(&self) -> u32 {
+        self.hits
+    }
+
+    pub fn cache_misses(&self) -> u32 {
+        self.misses
+    }
+
+    pub fn cache_hit_rate(&self) -> f32 {
+        let total_queries = self.hits + self.misses;
+        if total_queries == 0 {
+            0.0
+        } else {
+            (self.hits as f32) / (total_queries as f32)
+        }
+    }
+}
 
 ////////////
 // Action //
@@ -39,10 +104,10 @@ pub struct Context {
     all_dice: DieKindCounts,
     /// A cache from normalized (State, Action) pairs to their expected value
     /// after evaluation.
-    action_value_cache: HashMap<NormalizedStateAction, f64>,
-    score_distr_cache: HashMap<NormalizedStateAction, ScorePMF>,
+    action_value_cache: Cache<NormalizedStateAction, f64>,
+    score_distr_cache: Cache<NormalizedStateAction, ScorePMF>,
+    actions_cache: Cache<DiceVec, Rc<Vec<Action>>>,
     actions_explored: u64,
-    cache_hits: Cell<u64>,
     game_finished_prunes: Cell<u64>,
     /// A recursion depth tracker to limit the search depth. Since it appears you
     /// can actually start a new roll if you score and hold all the dice on the
@@ -70,18 +135,14 @@ impl Context {
             depth_max: 30,
             joint_path_prob: 1.0,
             joint_path_prob_min: 1.0e-10,
-            action_value_cache: HashMap::new(),
-            score_distr_cache: HashMap::new(),
+            action_value_cache: Cache::new(),
+            score_distr_cache: Cache::new(),
+            actions_cache: Cache::new(),
             actions_explored: 0,
-            cache_hits: Cell::new(0),
             depth_prunes: Cell::new(0),
             joint_prob_prunes: Cell::new(0),
         }
     }
-
-    // pub fn set_all_dice(&mut self, all_dice: DieKindCounts) {
-    //     self.all_dice = all_dice;
-    // }
 
     #[inline]
     pub fn actions_explored(&self) -> u64 {
@@ -157,47 +218,28 @@ impl Context {
         false
     }
 
-    #[inline]
-    fn peek_cache(&self, key: &NormalizedStateAction) -> Option<f64> {
-        let out = self.action_value_cache.get(key).copied();
-        if out.is_some() {
-            self.cache_hits.set(self.cache_hits() + 1);
-        }
-        out
+    fn action_value_cache_mut(&mut self) -> &mut Cache<NormalizedStateAction, f64> {
+        &mut self.action_value_cache
     }
 
-    #[inline]
-    fn fill_cache(&mut self, key: NormalizedStateAction, value: f64) {
-        self.action_value_cache.insert(key, value);
+    pub fn action_value_cache(&self) -> &Cache<NormalizedStateAction, f64> {
+        &self.action_value_cache
     }
 
-    #[inline]
-    fn peek_score_distr_cache(&self, key: &NormalizedStateAction) -> Option<ScorePMF> {
-        let out = self.score_distr_cache.get(key).cloned();
-        if out.is_some() {
-            self.cache_hits.set(self.cache_hits() + 1);
-        }
-        out
+    fn score_distr_cache_mut(&mut self) -> &mut Cache<NormalizedStateAction, ScorePMF> {
+        &mut self.score_distr_cache
     }
 
-    #[inline]
-    fn fill_score_distr_cache(&mut self, key: NormalizedStateAction, pmf: ScorePMF) {
-        self.score_distr_cache.insert(key, pmf);
+    pub fn score_distr_cache(&self) -> &Cache<NormalizedStateAction, ScorePMF> {
+        &self.score_distr_cache
     }
 
-    #[inline]
-    pub fn cache_size(&self) -> usize {
-        self.action_value_cache.len()
+    fn actions_cache_mut(&mut self) -> &mut Cache<DiceVec, Rc<Vec<Action>>> {
+        &mut self.actions_cache
     }
 
-    #[inline]
-    fn cache_hits(&self) -> u64 {
-        self.cache_hits.get()
-    }
-
-    #[inline]
-    pub fn cache_hit_rate(&self) -> f64 {
-        (self.cache_hits() as f64) / (self.actions_explored() as f64 + 1.0)
+    pub fn actions_cache(&self) -> &Cache<DiceVec, Rc<Vec<Action>>> {
+        &self.actions_cache
     }
 
     #[inline]
@@ -329,7 +371,7 @@ impl NormalizedStateAction {
 
         // check if the cache already contains this normalized (State, Action)
         // pair.
-        if let Some(action_value) = ctxt.peek_cache(&self) {
+        if let Some(action_value) = ctxt.action_value_cache_mut().peek_cache(&self) {
             return action_value;
         }
 
@@ -349,9 +391,9 @@ impl NormalizedStateAction {
             // greatest expected value
             let best_action_value = ctxt.with_next_depth(p_roll, move |ctxt| {
                 next_state
-                    .actions()
-                    .into_iter()
-                    .map(|next_action| {
+                    .actions(ctxt)
+                    .iter()
+                    .map(|&next_action| {
                         Self::from_state_action(ctxt.all_dice, next_state, next_action)
                             .expected_value(ctxt)
                     })
@@ -362,8 +404,8 @@ impl NormalizedStateAction {
             expected_value += p_roll * best_action_value;
         }
 
-        ctxt.fill_cache(self, expected_value);
-        expected_value
+        ctxt.action_value_cache_mut()
+            .fill_cache(self, expected_value)
     }
 
     pub fn score_distribution(self, ctxt: &mut Context) -> ScorePMF {
@@ -374,7 +416,7 @@ impl NormalizedStateAction {
             return ScorePMF::constant(score);
         }
 
-        if let Some(pmf) = ctxt.peek_score_distr_cache(&self) {
+        if let Some(pmf) = ctxt.score_distr_cache_mut().peek_cache(&self) {
             return pmf;
         }
 
@@ -389,9 +431,9 @@ impl NormalizedStateAction {
         for (next_state, p_roll) in self.possible_roll_states(&kind_table) {
             let (_best_exp_value, best_score_distr) = ctxt.with_next_depth(p_roll, move |ctxt| {
                 next_state
-                    .actions()
-                    .into_iter()
-                    .map(|next_action| {
+                    .actions(ctxt)
+                    .iter()
+                    .map(|&next_action| {
                         let distr = Self::from_state_action(ctxt.all_dice, next_state, next_action)
                             .score_distribution(ctxt);
                         (distr.expected_value(), distr)
@@ -403,8 +445,7 @@ impl NormalizedStateAction {
             score_pmf.add_conditional_distr(p_roll, &best_score_distr);
         }
 
-        ctxt.fill_score_distr_cache(self, score_pmf.clone());
-        score_pmf
+        ctxt.score_distr_cache_mut().fill_cache(self, score_pmf)
     }
 }
 
@@ -436,70 +477,46 @@ impl State {
     /// From the current round `State` return the complete set of possible
     /// `Action`s the player can take. Returns an empty set if the player has
     /// "busted".
-    fn actions(&self) -> Vec<Action> {
-        // if this dice roll has no scores whatsoever, then there are no actions
-        // (our turn has ended).
-        if self.rolled_dice.is_bust() {
-            return Vec::new();
+    fn actions(&self, ctxt: &mut Context) -> Rc<Vec<Action>> {
+        // Luckily, the set of possible actions generated from a `State` is only
+        // dependent on the currently rolled dice.
+        if let Some(actions) = ctxt.actions_cache_mut().peek_cache(&self.rolled_dice) {
+            return actions;
         }
 
-        // we _can_ in fact hold all the dice, but they must all be scoring dice.
-        let max_num_holds = self.rolled_dice.len();
+        let actions_vec = if self.rolled_dice.is_bust() {
+            // if this dice roll has no scores whatsoever, then there are no actions
+            // (our turn has ended).
+            Vec::new()
+        } else {
+            // we _can_ in fact hold all the dice, but they must all be scoring dice.
+            let max_num_holds = self.rolled_dice.len();
 
-        // TODO(philiphayes): this is probably no longer true with multiple
-        // different die kinds.
+            // TODO(philiphayes): this is probably no longer true with multiple
+            // different die kinds.
 
-        // // insight: it's (almost always) not rational to choose an action with a
-        // // lower score but the same number of dice.
-        // //
-        // // for example, suppose we have [1,5] on the table. we then have 4 possible
-        // // actions: [pass, roll[1], roll[5], roll[1,5]].
-        // //
-        // // consider roll[1] vs roll[5]
-        // //
-        // // choosing roll[1] means scoring 100 pts then rolling 1 die while
-        // // roll[5] scores 50 pts and also rolls 1 die. (hypothesis) there's no
-        // // reason to lose out on 50 pts by only holding 5.
-        //
-        // // TODO(philiphayes): is this still necessary?
-        // let mut best_score_by_ndice = [0u16; 8];
-        //
-        // // the set of all possible dice we can hold from the board.
-        // // we must hold at least one die.
-        // let possible_holds = (1..=max_num_holds)
-        //     .flat_map(|ndice| self.rolled_dice.multisets(ndice))
-        //     // only accept holds of scoring dice and the max score hold per hold size
-        //     .filter_map(|held_dice| {
-        //         let len = held_dice.len() as usize;
-        //         let score = held_dice.exact_score();
-        //         // this also handles rejecting zero score rolls (since strictly >)
-        //         if score > best_score_by_ndice[len] {
-        //             best_score_by_ndice[len] = score;
-        //             Some(Action::Roll(held_dice))
-        //         } else {
-        //             None
-        //         }
-        //     })
-        //     .collect::<Vec<_>>();
+            // for now just do the dumb thing and try all possible non-bust holds
+            let possible_holds = (1..=max_num_holds)
+                .flat_map(|ndice| self.rolled_dice.multisets_iter(ndice))
+                .filter_map(|held_dice| {
+                    if held_dice.is_valid_hold() {
+                        Some(Action::Roll(held_dice))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
 
-        // for now just do the dumb thing and try all possible non-bust holds
-        let possible_holds = (1..=max_num_holds)
-            .flat_map(|ndice| self.rolled_dice.multisets_iter(ndice))
-            .filter_map(|held_dice| {
-                if held_dice.is_valid_hold() {
-                    Some(Action::Roll(held_dice))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+            let mut actions_vec = possible_holds;
 
-        let mut actions_vec = possible_holds;
+            // can always pass if we have some scores
+            actions_vec.push(Action::Pass);
 
-        // can always pass if we have some scores
-        actions_vec.push(Action::Pass);
+            actions_vec
+        };
 
-        actions_vec
+        ctxt.actions_cache_mut()
+            .fill_cache(self.rolled_dice, Rc::new(actions_vec))
     }
 
     /// Evaluate the expected value of applying this `Action` to the `State`,
@@ -550,9 +567,9 @@ impl State {
     /// action, what is the expected turn score and bust probability?
     pub fn actions_by_expected_value(&self, ctxt: &mut Context) -> Vec<(Action, f64, f64)> {
         let mut actions_values = self
-            .actions()
-            .into_iter()
-            .map(|action| {
+            .actions(ctxt)
+            .iter()
+            .map(|&action| {
                 (
                     action,
                     self.action_expected_value(ctxt, action),
