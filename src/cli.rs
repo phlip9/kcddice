@@ -74,6 +74,33 @@ impl Args {
     }
 }
 
+/////////////
+// Metrics //
+/////////////
+
+pub struct Metrics(Vec<(String, String)>);
+
+impl Metrics {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push(&mut self, label: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        self.0.push((label.into(), value.into()));
+        self
+    }
+
+    pub fn to_table(&self) -> Table {
+        let mut table = Table::new("{:>}  {:<}");
+
+        for (label, value) in &self.0 {
+            table.add_row(row!(label, value));
+        }
+
+        table
+    }
+}
+
 ///////////////////
 // Command trait //
 ///////////////////
@@ -81,8 +108,10 @@ impl Args {
 pub trait Command: Sized {
     const USAGE: &'static str;
 
+    type Output: fmt::Display;
+
     fn try_from_cli_args(args: Args) -> Result<Self, String>;
-    fn run(self);
+    fn run(self) -> Result<Self::Output, String>;
 }
 
 ///////////////////////
@@ -138,6 +167,8 @@ OPTIONS:
       as -k [s:3,hk:2,o:1]
 ";
 
+    type Output = BestActionCommandOutput;
+
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
@@ -155,7 +186,7 @@ OPTIONS:
         )
     }
 
-    fn run(self) {
+    fn run(self) -> Result<Self::Output, String> {
         let (dice_table, all_dice) = self.all_dice.to_compact_form();
         let mut ctxt = Context::new(dice_table, all_dice);
 
@@ -166,8 +197,8 @@ OPTIONS:
         let actions_values = state.actions_by_expected_value(&mut ctxt);
         let search_duration = start_time.elapsed();
 
-        let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
-            "action",
+        let mut actions = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
+            format!("{:>12}", "action"),
             "held dice",
             "exp v",
             "pbust"
@@ -187,81 +218,71 @@ OPTIONS:
                     ),
                 ),
             };
-            table.add_row(row!(action_str, dice_str, value_str, p_bust_str));
+            actions.add_row(row!(action_str, dice_str, value_str, p_bust_str));
         }
 
         // we only show the top 10 results, but display '...' to show that
         // there were more.
         if len > 10 {
-            table.add_row(row!("...", format!("(x {})", len - 10), "", ""));
+            actions.add_row(row!("...", format!("(x {})", len - 10), "", ""));
         }
 
+        let mut metrics = Metrics::new();
+
         // display evaluation statistics
-        table.add_heading("");
-        table.add_row(row!(
-            "search duration",
-            format!("{:.2?}", search_duration),
-            "",
-            ""
-        ));
-        table.add_row(row!(
-            "actions explored",
-            ctxt.actions_explored().to_string(),
-            "",
-            ""
-        ));
-        table.add_row(row!(
+        metrics.push("search duration", format!("{:.2?}", search_duration));
+        metrics.push("actions explored", ctxt.actions_explored().to_string());
+        metrics.push(
             "game finished rate",
             format!("{:0.3}", ctxt.game_finished_rate()),
-            "",
-            ""
-        ));
-        table.add_heading("");
-        table.add_row(row!(
+        );
+        metrics.push(
             "action value cache size",
             format!(
                 "{} ({})",
                 ctxt.action_value_cache().cache_size(),
-                ctxt.action_value_cache().cache_size_bytes()
+                ctxt.action_value_cache().cache_size_bytes(),
             ),
-            "",
-            ""
-        ));
-        table.add_row(row!(
+        );
+        metrics.push(
             "action value cache hit rate",
             format!(
                 "{:0.3} (h: {}, m: {})",
                 ctxt.action_value_cache().cache_hit_rate(),
                 ctxt.action_value_cache().cache_hits(),
-                ctxt.action_value_cache().cache_misses()
+                ctxt.action_value_cache().cache_misses(),
             ),
-            "",
-            ""
-        ));
-        table.add_heading("");
-        table.add_row(row!(
+        );
+        metrics.push(
             "actions cache size",
             format!(
                 "{} ({})",
                 ctxt.actions_cache().cache_size(),
-                ctxt.actions_cache().cache_size_bytes()
+                ctxt.actions_cache().cache_size_bytes(),
             ),
-            "",
-            ""
-        ));
-        table.add_row(row!(
+        );
+        metrics.push(
             "actions cache hit rate",
             format!(
                 "{:0.3} (h: {}, m: {})",
                 ctxt.actions_cache().cache_hit_rate(),
                 ctxt.actions_cache().cache_hits(),
-                ctxt.actions_cache().cache_misses()
+                ctxt.actions_cache().cache_misses(),
             ),
-            "",
-            ""
-        ));
+        );
 
-        print!("\n{}", table);
+        Ok(BestActionCommandOutput { actions, metrics })
+    }
+}
+
+pub struct BestActionCommandOutput {
+    actions: Table,
+    metrics: Metrics,
+}
+
+impl fmt::Display for BestActionCommandOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\n{}\n{}", self.actions, self.metrics.to_table())
     }
 }
 
@@ -305,6 +326,8 @@ USAGE:
     kcddice score-distr [option ...] <round-total> <target-score> <dice-left>
 ";
 
+    type Output = ScoreDistrCommandOutput;
+
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
@@ -317,7 +340,7 @@ USAGE:
         Self::try_from_str_args(&round_total, &target_score, &dice_left, all_dice.as_deref())
     }
 
-    fn run(self) {
+    fn run(self) -> Result<Self::Output, String> {
         let (dice_table, all_dice_counts) = self.all_dice.to_compact_form();
         let dice_left = self.dice_left.to_counts(&dice_table);
         let mut ctxt = Context::new(dice_table, all_dice_counts);
@@ -331,65 +354,74 @@ USAGE:
         let mut dense_score_pmf = score_pmf.clone().into_vec();
         dense_score_pmf.sort_unstable_by(|(s1, _), (s2, _)| s1.cmp(s2));
 
-        for (score, p_score) in dense_score_pmf {
-            println!("{}\t{}", score, p_score);
-        }
-
-        let mut table = Table::new("{:>}  {:<}");
-        table.add_row(row!("search duration", format!("{:.2?}", search_duration)));
-        table.add_row(row!(
+        let mut metrics = Metrics::new();
+        metrics.push("search duration", format!("{:.2?}", search_duration));
+        metrics.push(
             "pmf expected value",
-            format!("{:.3}", score_pmf.expected_value())
-        ));
-        table.add_row(row!(
-            "pmf total mass",
-            format!("{}", score_pmf.total_mass())
-        ));
-        table.add_row(row!(
-            "actions explored",
-            ctxt.actions_explored().to_string()
-        ));
-        table.add_row(row!(
+            format!("{:.3}", score_pmf.expected_value()),
+        );
+        metrics.push("pmf total mass", format!("{}", score_pmf.total_mass()));
+        metrics.push("actions explored", ctxt.actions_explored().to_string());
+        metrics.push(
             "game finished rate",
-            format!("{:0.3}", ctxt.game_finished_rate())
-        ));
-        table.add_heading("");
-        table.add_row(row!(
+            format!("{:0.3}", ctxt.game_finished_rate()),
+        );
+        metrics.push(
             "score distr cache size",
             format!(
                 "{} ({})",
                 ctxt.score_distr_cache().cache_size(),
-                ctxt.score_distr_cache().cache_size_bytes()
-            )
-        ));
-        table.add_row(row!(
+                ctxt.score_distr_cache().cache_size_bytes(),
+            ),
+        );
+        metrics.push(
             "score distr cache hit rate",
             format!(
                 "{:0.3} (h: {}, m: {})",
                 ctxt.score_distr_cache().cache_hit_rate(),
                 ctxt.score_distr_cache().cache_hits(),
-                ctxt.score_distr_cache().cache_misses()
-            )
-        ));
-        table.add_heading("");
-        table.add_row(row!(
+                ctxt.score_distr_cache().cache_misses(),
+            ),
+        );
+        metrics.push(
             "actions cache size",
             format!(
                 "{} ({})",
                 ctxt.actions_cache().cache_size(),
-                ctxt.actions_cache().cache_size_bytes()
+                ctxt.actions_cache().cache_size_bytes(),
             ),
-        ));
-        table.add_row(row!(
+        );
+        metrics.push(
             "actions cache hit rate",
             format!(
                 "{:0.3} (h: {}, m: {})",
                 ctxt.actions_cache().cache_hit_rate(),
                 ctxt.actions_cache().cache_hits(),
-                ctxt.actions_cache().cache_misses()
-            )
-        ));
-        eprint!("\n{}", table);
+                ctxt.actions_cache().cache_misses(),
+            ),
+        );
+
+        Ok(ScoreDistrCommandOutput {
+            distr: dense_score_pmf,
+            metrics,
+        })
+    }
+}
+
+pub struct ScoreDistrCommandOutput {
+    distr: Vec<(u16, f64)>,
+    metrics: Metrics,
+}
+
+impl fmt::Display for ScoreDistrCommandOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut table = Table::new("{:>}  {:<}");
+
+        for (score, p_score) in &self.distr {
+            table.add_row(row!(score, p_score));
+        }
+
+        write!(f, "\n{}\n{}", table, self.metrics.to_table())
     }
 }
 
@@ -420,6 +452,8 @@ impl Command for MarkovMatrixCommand {
     // TODO(philiphayes): fill out
     const USAGE: &'static str = "";
 
+    type Output = MarkovMatrixCommandOutput;
+
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
@@ -430,14 +464,27 @@ impl Command for MarkovMatrixCommand {
         Self::try_from_str_args(&target_score, all_dice.as_deref())
     }
 
-    fn run(self) {
+    fn run(self) -> Result<Self::Output, String> {
         let start_time = Instant::now();
         let (die_table, die_counts) = self.all_dice.to_compact_form();
         let matrix = MarkovMatrix::from_optimal_policy(die_table, die_counts, self.target_score);
         let search_duration = start_time.elapsed();
 
-        println!("{:?}", matrix);
-        println!("\nsearch duration  {:.2?}", search_duration);
+        let mut metrics = Metrics::new();
+        metrics.push("search duration", format!("{:.2?}", search_duration));
+
+        Ok(MarkovMatrixCommandOutput { matrix, metrics })
+    }
+}
+
+pub struct MarkovMatrixCommandOutput {
+    matrix: MarkovMatrix,
+    metrics: Metrics,
+}
+
+impl fmt::Display for MarkovMatrixCommandOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\n{:?}\n{}", self.matrix, self.metrics.to_table())
     }
 }
 
@@ -478,6 +525,8 @@ impl Command for TurnsCdfCommand {
     // TODO(philiphayes): fill out
     const USAGE: &'static str = "";
 
+    type Output = TurnsCdfCommandOutput;
+
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
@@ -495,7 +544,7 @@ impl Command for TurnsCdfCommand {
         )
     }
 
-    fn run(self) {
+    fn run(self) -> Result<Self::Output, String> {
         let start_time = Instant::now();
 
         let (our_die_table, our_die_counts) = self.our_dice.to_compact_form();
@@ -517,20 +566,6 @@ impl Command for TurnsCdfCommand {
 
         let search_duration = start_time.elapsed();
 
-        println!("their turns CDF");
-        println!("turn\tcumulative probability");
-
-        for turn in 1..=self.max_num_turns {
-            println!("{}\t{}", turn, their_turns_cdf[turn - 1]);
-        }
-
-        println!("\nour turns CDF");
-        println!("turn\tcumulative probability");
-
-        for turn in 1..=self.max_num_turns {
-            println!("{}\t{}", turn, our_turns_cdf[turn - 1]);
-        }
-
         // Assuming we always go first and play optimally, what is our a priori
         // win probability against an opponent that also plays optimally, but
         // may have different dice?
@@ -549,10 +584,45 @@ impl Command for TurnsCdfCommand {
         // of your total wealth.
         let p_win = p_rv1_lte_rv2(our_turns_cdf.view(), their_turns_cdf.view());
 
-        let mut table = Table::new("{:>}  {:<}");
-        table.add_row(row!("search_duration", format!("{:.2?}", search_duration)));
-        table.add_row(row!("Pr[win]", format!("{}", p_win)));
-        eprintln!("\n{}", table);
+        let mut metrics = Metrics::new();
+        metrics.push("search_duration", format!("{:.2?}", search_duration));
+        metrics.push("Pr[win]", format!("{}", p_win));
+
+        Ok(TurnsCdfCommandOutput {
+            max_num_turns: self.max_num_turns,
+            our_turns_cdf: our_turns_cdf.to_vec(),
+            their_turns_cdf: their_turns_cdf.to_vec(),
+            metrics,
+        })
+    }
+}
+
+pub struct TurnsCdfCommandOutput {
+    max_num_turns: usize,
+    our_turns_cdf: Vec<f64>,
+    their_turns_cdf: Vec<f64>,
+    metrics: Metrics,
+}
+
+impl fmt::Display for TurnsCdfCommandOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut table = Table::new("{:>}  {:<}  {:<}");
+
+        table.add_row(row!(
+            format!("{:>8}", "turn"),
+            "our turns CDF",
+            "their turns CDF"
+        ));
+
+        for turn in 1..=self.max_num_turns {
+            table.add_row(row!(
+                turn,
+                self.our_turns_cdf[turn - 1],
+                self.their_turns_cdf[turn - 1]
+            ));
+        }
+
+        write!(f, "\n{}\n{}", table, self.metrics.to_table())
     }
 }
 
@@ -582,6 +652,8 @@ SUBCOMMANDS:
     · kcddice turns-cdf - TODO
 ";
 
+    type Output = String;
+
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         let maybe_subcommand = args.subcommand()?;
 
@@ -604,12 +676,12 @@ SUBCOMMANDS:
         }
     }
 
-    fn run(self) {
+    fn run(self) -> Result<String, String> {
         match self {
-            Self::BestAction(cmd) => cmd.run(),
-            Self::ScoreDistr(cmd) => cmd.run(),
-            Self::MarkovMatrix(cmd) => cmd.run(),
-            Self::TurnsCdf(cmd) => cmd.run(),
+            Self::BestAction(cmd) => cmd.run().map(|out| out.to_string()),
+            Self::ScoreDistr(cmd) => cmd.run().map(|out| out.to_string()),
+            Self::MarkovMatrix(cmd) => cmd.run().map(|out| out.to_string()),
+            Self::TurnsCdf(cmd) => cmd.run().map(|out| out.to_string()),
         }
     }
 }
