@@ -3,23 +3,91 @@ use crate::{
     search::{p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, State},
     DEFAULT_TARGET_SCORE,
 };
-use pico_args::{self, Arguments};
-use std::time::Instant;
+use pico_args;
+use std::{fmt, str::FromStr, time::Instant};
 use tabular::{row, Table};
 
-pub trait Command: Sized {
-    const USAGE: &'static str;
+///////////////////////////
+// String parser helpers //
+///////////////////////////
 
-    fn parse_from_args(args: Arguments) -> Result<Self, String>;
-    fn run(self);
+fn parse_req<T>(s: &str) -> Result<T, String>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    T::from_str(s).map_err(|err| err.to_string())
+}
 
-    fn maybe_help(args: &mut Arguments) {
-        if args.contains(["-h", "--help"]) {
-            print!("{}", Self::USAGE);
+fn parse_opt<T>(opt_s: Option<&str>) -> Result<Option<T>, String>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    opt_s
+        .map(T::from_str)
+        .transpose()
+        .map_err(|err| err.to_string())
+}
+
+//////////////////////
+// CLI Args Wrapper //
+//////////////////////
+
+pub struct Args(pico_args::Arguments);
+
+impl Args {
+    pub fn new(inner: pico_args::Arguments) -> Self {
+        Self(inner)
+    }
+
+    fn subcommand(&mut self) -> Result<Option<String>, String> {
+        self.0.subcommand().map_err(|err| err.to_string())
+    }
+
+    fn opt_value(&mut self, keys: impl Into<pico_args::Keys>) -> Result<Option<String>, String> {
+        self.0
+            .opt_value_from_fn(keys, |s| Result::<_, pico_args::Error>::Ok(s.to_owned()))
+            .map_err(|err| err.to_string())
+    }
+
+    fn free_value(&mut self) -> Result<String, String> {
+        self.0
+            .free_from_fn(|s| Result::<_, pico_args::Error>::Ok(s.to_owned()))
+            .map_err(|err| err.to_string())
+    }
+
+    fn expect_finished(self) -> Result<(), String> {
+        let remaining = self.0.finish();
+        if !remaining.is_empty() {
+            Err(format!("unexpected arguments left: '{:?}'", remaining))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn maybe_help(&mut self, usage: &str) {
+        if self.0.contains(["-h", "--help"]) {
+            print!("{}", usage);
             std::process::exit(0);
         }
     }
 }
+
+///////////////////
+// Command trait //
+///////////////////
+
+pub trait Command: Sized {
+    const USAGE: &'static str;
+
+    fn try_from_cli_args(args: Args) -> Result<Self, String>;
+    fn run(self);
+}
+
+///////////////////////
+// BestActionCommand //
+///////////////////////
 
 #[derive(Debug)]
 pub struct BestActionCommand {
@@ -27,6 +95,27 @@ pub struct BestActionCommand {
     target_score: u16,
     rolled_dice: parse::DiceVec,
     all_dice: parse::DiceSet,
+}
+
+impl BestActionCommand {
+    pub fn try_from_str_args(
+        round_total: &str,
+        target_score: Option<&str>,
+        rolled_dice: &str,
+        all_dice: Option<&str>,
+    ) -> Result<Self, String> {
+        let cmd = Self {
+            round_total: parse_req(round_total)?,
+            target_score: parse_opt(target_score)?.unwrap_or(DEFAULT_TARGET_SCORE),
+            rolled_dice: parse_req(rolled_dice)?,
+            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+        };
+
+        cmd.all_dice
+            .validate_init_set(&cmd.rolled_dice.to_die_set())?;
+
+        Ok(cmd)
+    }
 }
 
 impl Command for BestActionCommand {
@@ -49,31 +138,21 @@ OPTIONS:
       as -k [s:3,hk:2,o:1]
 ";
 
-    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
-        Self::maybe_help(&mut args);
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        args.maybe_help(Self::USAGE);
 
-        let cmd = Self {
-            round_total: args.free_from_str().map_err(|err| err.to_string())?,
-            rolled_dice: args.free_from_str().map_err(|err| err.to_string())?,
-            target_score: args
-                .opt_value_from_str(["--target-score", "-t"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or(DEFAULT_TARGET_SCORE),
-            all_dice: args
-                .opt_value_from_str(["--die-kinds", "-k"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-        };
+        let target_score = args.opt_value(["-t", "--target-score"])?;
+        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
+        let round_total = args.free_value()?;
+        let rolled_dice = args.free_value()?;
+        args.expect_finished()?;
 
-        cmd.all_dice
-            .validate_init_set(&cmd.rolled_dice.to_die_set())?;
-
-        let remaining = args.finish();
-        if !remaining.is_empty() {
-            return Err(format!("unexpected arguments left: '{:?}'", remaining));
-        }
-
-        Ok(cmd)
+        Self::try_from_str_args(
+            &round_total,
+            target_score.as_deref(),
+            &rolled_dice,
+            all_dice.as_deref(),
+        )
     }
 
     fn run(self) {
@@ -186,12 +265,36 @@ OPTIONS:
     }
 }
 
+///////////////////////
+// ScoreDistrCommand //
+///////////////////////
+
 #[derive(Debug)]
 pub struct ScoreDistrCommand {
     round_total: u16,
     target_score: u16,
     dice_left: parse::DiceSet,
     all_dice: parse::DiceSet,
+}
+
+impl ScoreDistrCommand {
+    fn try_from_str_args(
+        round_total: &str,
+        target_score: &str,
+        dice_left: &str,
+        all_dice: Option<&str>,
+    ) -> Result<Self, String> {
+        let cmd = Self {
+            round_total: parse_req(round_total)?,
+            target_score: parse_req(target_score)?,
+            dice_left: parse_req(dice_left)?,
+            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+        };
+
+        cmd.all_dice.validate_init_set(&cmd.dice_left)?;
+
+        Ok(cmd)
+    }
 }
 
 impl Command for ScoreDistrCommand {
@@ -202,27 +305,16 @@ USAGE:
     kcddice score-distr [option ...] <round-total> <target-score> <dice-left>
 ";
 
-    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
-        Self::maybe_help(&mut args);
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        args.maybe_help(Self::USAGE);
 
-        let cmd = Self {
-            round_total: args.free_from_str().map_err(|err| err.to_string())?,
-            target_score: args.free_from_str().map_err(|err| err.to_string())?,
-            dice_left: args.free_from_str().map_err(|err| err.to_string())?,
-            all_dice: args
-                .opt_value_from_str(["--die-kinds", "-k"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-        };
+        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
+        let round_total = args.free_value()?;
+        let target_score = args.free_value()?;
+        let dice_left = args.free_value()?;
+        args.expect_finished()?;
 
-        cmd.all_dice.validate_init_set(&cmd.dice_left)?;
-
-        let remaining = args.finish();
-        if !remaining.is_empty() {
-            return Err(format!("unexpected arguments left: '{:?}'", remaining));
-        }
-
-        Ok(cmd)
+        Self::try_from_str_args(&round_total, &target_score, &dice_left, all_dice.as_deref())
     }
 
     fn run(self) {
@@ -301,38 +393,41 @@ USAGE:
     }
 }
 
+/////////////////////////
+// MarkovMatrixCommand //
+/////////////////////////
+
 #[derive(Debug)]
 pub struct MarkovMatrixCommand {
     target_score: u16,
     all_dice: parse::DiceSet,
 }
 
-impl Command for MarkovMatrixCommand {
-    // TODO(philiphayes): fill out
-    const USAGE: &'static str = "";
-
-    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
-        Self::maybe_help(&mut args);
-
+impl MarkovMatrixCommand {
+    fn try_from_str_args(target_score: &str, all_dice: Option<&str>) -> Result<Self, String> {
         let cmd = Self {
-            target_score: args
-                .opt_free_from_str()
-                .map_err(|err| err.to_string())?
-                .unwrap_or(DEFAULT_TARGET_SCORE),
-            all_dice: args
-                .opt_value_from_str(["--die-kinds", "-k"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            target_score: parse_req(target_score)?,
+            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.all_dice)?;
 
-        let remaining = args.finish();
-        if !remaining.is_empty() {
-            return Err(format!("unexpected arguments left: '{:?}'", remaining));
-        }
-
         Ok(cmd)
+    }
+}
+
+impl Command for MarkovMatrixCommand {
+    // TODO(philiphayes): fill out
+    const USAGE: &'static str = "";
+
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        args.maybe_help(Self::USAGE);
+
+        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
+        let target_score = args.free_value()?;
+        args.expect_finished()?;
+
+        Self::try_from_str_args(&target_score, all_dice.as_deref())
     }
 
     fn run(self) {
@@ -346,6 +441,10 @@ impl Command for MarkovMatrixCommand {
     }
 }
 
+/////////////////////
+// TurnsCdfCommand //
+/////////////////////
+
 #[derive(Debug)]
 pub struct TurnsCdfCommand {
     target_score: u16,
@@ -354,35 +453,46 @@ pub struct TurnsCdfCommand {
     their_dice: parse::DiceSet,
 }
 
-impl Command for TurnsCdfCommand {
-    // TODO(philiphayes): fill out
-    const USAGE: &'static str = "";
-
-    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
-        Self::maybe_help(&mut args);
-
+impl TurnsCdfCommand {
+    fn try_from_str_args(
+        target_score: &str,
+        max_num_turns: &str,
+        our_dice: Option<&str>,
+        their_dice: Option<&str>,
+    ) -> Result<Self, String> {
         let cmd = Self {
-            target_score: args.free_from_str().map_err(|err| err.to_string())?,
-            max_num_turns: args.free_from_str().map_err(|err| err.to_string())?,
-            our_dice: args
-                .opt_value_from_str(["--our-die-kinds", "-o"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-            their_dice: args
-                .opt_value_from_str(["--their-die-kinds", "-t"])
-                .map_err(|err| err.to_string())?
-                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            target_score: parse_req(target_score)?,
+            max_num_turns: parse_req(max_num_turns)?,
+            our_dice: parse_opt(our_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            their_dice: parse_opt(their_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.our_dice.validate_init_set(&cmd.our_dice)?;
         cmd.their_dice.validate_init_set(&cmd.their_dice)?;
 
-        let remaining = args.finish();
-        if !remaining.is_empty() {
-            return Err(format!("unexpected arguments left: '{:?}'", remaining));
-        }
-
         Ok(cmd)
+    }
+}
+
+impl Command for TurnsCdfCommand {
+    // TODO(philiphayes): fill out
+    const USAGE: &'static str = "";
+
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        args.maybe_help(Self::USAGE);
+
+        let our_dice = args.opt_value(["-o", "--our-die-kinds"])?;
+        let their_dice = args.opt_value(["-t", "--their-die-kinds"])?;
+        let target_score = args.free_value()?;
+        let max_num_turns = args.free_value()?;
+        args.expect_finished()?;
+
+        Self::try_from_str_args(
+            &target_score,
+            &max_num_turns,
+            our_dice.as_deref(),
+            their_dice.as_deref(),
+        )
     }
 
     fn run(self) {
@@ -446,6 +556,10 @@ impl Command for TurnsCdfCommand {
     }
 }
 
+/////////////////
+// BaseCommand //
+/////////////////
+
 #[derive(Debug)]
 pub enum BaseCommand {
     BestAction(BestActionCommand),
@@ -468,19 +582,23 @@ SUBCOMMANDS:
     · kcddice turns-cdf - TODO
 ";
 
-    fn parse_from_args(mut args: Arguments) -> Result<Self, String> {
-        let maybe_subcommand = args.subcommand().map_err(|err| err.to_string())?;
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        let maybe_subcommand = args.subcommand()?;
 
         match maybe_subcommand.as_deref() {
-            Some("best-action") => Ok(Self::BestAction(BestActionCommand::parse_from_args(args)?)),
-            Some("score-distr") => Ok(Self::ScoreDistr(ScoreDistrCommand::parse_from_args(args)?)),
-            Some("markov-matrix") => Ok(Self::MarkovMatrix(MarkovMatrixCommand::parse_from_args(
+            Some("best-action") => Ok(Self::BestAction(BestActionCommand::try_from_cli_args(
                 args,
             )?)),
-            Some("turns-cdf") => Ok(Self::TurnsCdf(TurnsCdfCommand::parse_from_args(args)?)),
+            Some("score-distr") => Ok(Self::ScoreDistr(ScoreDistrCommand::try_from_cli_args(
+                args,
+            )?)),
+            Some("markov-matrix") => Ok(Self::MarkovMatrix(
+                MarkovMatrixCommand::try_from_cli_args(args)?,
+            )),
+            Some("turns-cdf") => Ok(Self::TurnsCdf(TurnsCdfCommand::try_from_cli_args(args)?)),
             Some(command) => Err(format!("'{}' is not a recognized command", command)),
             None => {
-                Self::maybe_help(&mut args);
+                args.maybe_help(Self::USAGE);
                 Err("no subcommand specified".to_string())
             }
         }
