@@ -1,28 +1,12 @@
-[package]
-name = "kcddice"
-version = "0.1.0"
-edition = "2021"
+[workspace]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-approx = "0.5.1"
-bytesize = "1.1.0"
-claim = "0.5.0"
-itertools = "0.10.3"
-ndarray = "0.15.4"
-pico-args = "0.4.2"
-tabular = "0.2.0"
-
-[dev-dependencies]
-proptest = "1.0.0"
+members = [
+    "kcddice",
+]
 
 [profile.release]
 codegen-units = 1
 lto = true
 panic = "abort"
-debug = 1
-
-[[bin]]
-name = "kcddice"
-path = "src/main.rs"
+opt-level = 3
+debug = 0
