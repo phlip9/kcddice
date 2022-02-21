@@ -7,3 +7,5 @@ perf.data.perf
 __pycache__
 
 proptest-regressions
+
+kcddice-www/node_modules/
