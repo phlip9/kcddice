@@ -2,7 +2,7 @@
 
 members = [
     "kcddice",
-    "kcddice-wasm",
+    "kcddice-www",
 ]
 
 [profile.release]

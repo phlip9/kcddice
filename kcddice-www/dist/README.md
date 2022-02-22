@@ -1,1 +1,1 @@
-`webpack build` output directory
+`trunk build` output dir

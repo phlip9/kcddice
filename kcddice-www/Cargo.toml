@@ -1,0 +1,13 @@
+[package]
+name = "kcddice-www"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+console_error_panic_hook = "0.1.7"
+sycamore = "0.8.0-beta.2"
+wasm-bindgen = "0.2.79"
+
+[dependencies.web-sys]
+features = ["InputEvent", "KeyboardEvent", "Location", "Storage"]
+version = "0.3.56"
