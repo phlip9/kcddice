@@ -1,11 +1,17 @@
 use crate::{
+    dice::DieKindTable,
     parse,
-    search::{p_rv1_lte_rv2, Action, Context, MarkovMatrix, NormalizedStateAction, State},
+    search::{
+        p_rv1_lte_rv2, Action, ActionValue, Context, MarkovMatrix, NormalizedStateAction, State,
+    },
     DEFAULT_TARGET_SCORE,
 };
 use pico_args;
-use std::{fmt, str::FromStr, time::Instant};
-use tabular::{row, Table};
+use std::{fmt, str::FromStr};
+use tabular::{row, Row, Table};
+// For some reason, `std::time::Instant` doesn't just use `performance.now()` in
+// wasm/web... this crate does that.
+use trice::Instant;
 
 ///////////////////////////
 // String parser helpers //
@@ -78,6 +84,7 @@ impl Args {
 // Metrics //
 /////////////
 
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Metrics(Vec<(String, String)>);
 
 impl Metrics {
@@ -194,42 +201,12 @@ OPTIONS:
         let state = State::new(self.round_total, self.target_score, rolled_dice);
 
         let start_time = Instant::now();
-        let actions_values = state.actions_by_expected_value(&mut ctxt);
+        let action_values = state.actions_by_expected_value(&mut ctxt);
+        let action_values = ActionValuesTable(action_values);
         let search_duration = start_time.elapsed();
-
-        let mut actions = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
-            format!("{:>12}", "action"),
-            "held dice",
-            "exp v",
-            "pbust"
-        ));
-
-        let len = actions_values.len();
-        for (action, value, p_bust) in actions_values.into_iter().take(10) {
-            let value_str = format!("{:0.1}", value);
-            let p_bust_str = format!("{:0.2}", p_bust);
-            let (action_str, dice_str) = match action {
-                Action::Pass => ("pass", String::new()),
-                Action::Roll(held_dice) => (
-                    "hold dice",
-                    format!(
-                        "{}",
-                        parse::DiceVec::from_compact_form(&dice_table, held_dice)
-                    ),
-                ),
-            };
-            actions.add_row(row!(action_str, dice_str, value_str, p_bust_str));
-        }
-
-        // we only show the top 10 results, but display '...' to show that
-        // there were more.
-        if len > 10 {
-            actions.add_row(row!("...", format!("(x {})", len - 10), "", ""));
-        }
 
         let mut metrics = Metrics::new();
 
-        // display evaluation statistics
         metrics.push("search duration", format!("{:.2?}", search_duration));
         metrics.push("actions explored", ctxt.actions_explored().to_string());
         metrics.push(
@@ -271,18 +248,65 @@ OPTIONS:
             ),
         );
 
-        Ok(BestActionCommandOutput { actions, metrics })
+        Ok(BestActionCommandOutput {
+            dice_table,
+            action_values,
+            metrics,
+        })
     }
 }
 
+fn row_from_cells(cells: impl Iterator<Item = String>) -> Row {
+    let mut row = Row::new();
+    for cell in cells {
+        row.add_cell(cell);
+    }
+    row
+}
+
+#[derive(Clone, Default)]
+pub struct ActionValuesTable(pub Vec<ActionValue>);
+
+impl ActionValuesTable {
+    fn to_table(&self, dice_table: &DieKindTable) -> Table {
+        let mut table = Table::new("{:>}  {:<}  {:>} {:>}").with_row(row!(
+            format!("{:>12}", "action"),
+            "held dice",
+            "exp v",
+            "pbust"
+        ));
+
+        let len = self.0.len();
+        for action_value in self.0.iter().take(10) {
+            let row = row_from_cells(action_value.to_row_cells(dice_table).into_iter());
+            table.add_row(row);
+        }
+
+        // we only show the top 10 results, but display '...' to show that
+        // there were more.
+        if len > 10 {
+            table.add_row(row!("...", format!("(+ {})", len - 10), "", ""));
+        }
+
+        table
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct BestActionCommandOutput {
-    actions: Table,
-    metrics: Metrics,
+    pub dice_table: DieKindTable,
+    pub action_values: ActionValuesTable,
+    pub metrics: Metrics,
 }
 
 impl fmt::Display for BestActionCommandOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "\n{}\n{}", self.actions, self.metrics.to_table())
+        write!(
+            f,
+            "\n{}\n{}",
+            self.action_values.to_table(&self.dice_table),
+            self.metrics.to_table()
+        )
     }
 }
 

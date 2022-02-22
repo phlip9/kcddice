@@ -508,24 +508,64 @@ impl State {
 
     /// For each possible `Action` from this `State`, conditioned on choosing that
     /// action, what is the expected turn score and bust probability?
-    pub fn actions_by_expected_value(&self, ctxt: &mut Context) -> Vec<(Action, f64, f64)> {
+    pub fn actions_by_expected_value(&self, ctxt: &mut Context) -> Vec<ActionValue> {
         let mut actions_values = self
             .actions(ctxt)
             .iter()
-            .map(|&action| {
-                (
-                    action,
-                    self.action_expected_value(ctxt, action),
-                    self.action_p_bust(ctxt, action),
-                )
+            .map(|&action| ActionValue {
+                action,
+                expected_value: self.action_expected_value(ctxt, action),
+                p_bust: self.action_p_bust(ctxt, action),
             })
             .collect::<Vec<_>>();
 
         // sort by the expected turn score from highest to lowest.
-        actions_values.sort_unstable_by(|(_, v1, _), (_, v2, _)| total_cmp_f64(v1, v2).reverse());
+        actions_values.sort_unstable_by(|av1, av2| {
+            total_cmp_f64(&av1.expected_value, &av2.expected_value).reverse()
+        });
         actions_values
     }
 }
+
+#[derive(Clone)]
+pub struct ActionValue {
+    pub action: Action,
+    pub expected_value: f64,
+    pub p_bust: f64,
+}
+
+impl ActionValue {
+    pub fn to_row_cells(&self, dice_table: &DieKindTable) -> Vec<String> {
+        let (action_str, dice_str) = match self.action {
+            Action::Pass => ("pass", String::new()),
+            Action::Roll(held_dice) => (
+                "hold dice",
+                format!(
+                    "{}",
+                    crate::parse::DiceVec::from_compact_form(&dice_table, held_dice)
+                ),
+            ),
+        };
+        vec![
+            action_str.to_owned(),
+            dice_str,
+            format!("{:0.1}", self.expected_value),
+            format!("{:0.2}", self.p_bust),
+        ]
+    }
+}
+
+// HACK: can't seem to get around sycamore requiring PartialEq+Eq impl'd even
+// though i'm using a keyed iterator???
+impl cmp::PartialEq for ActionValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.action == other.action
+            && total_cmp_f64(&self.expected_value, &other.expected_value).is_eq()
+            && total_cmp_f64(&self.p_bust, &other.p_bust).is_eq()
+    }
+}
+
+impl cmp::Eq for ActionValue {}
 
 ///////////////
 // Score PMF //

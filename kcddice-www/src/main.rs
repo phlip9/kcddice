@@ -1,4 +1,10 @@
-use std::cell::Cell;
+use kcddice::{
+    cli::{BestActionCommand, BestActionCommandOutput, Command},
+    dice::DieKindTable,
+    search::ActionValue,
+};
+use log::{debug, trace, warn};
+use std::{cell::Cell, rc::Rc};
 use sycamore::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, HtmlInputElement, KeyboardEvent};
@@ -95,6 +101,10 @@ impl AppState {
 
 fn main() {
     console_error_panic_hook::set_once();
+    // console_log::init_with_level(log::Level::Debug).expect("Failed to init logger");
+    console_log::init_with_level(log::Level::Trace).expect("Failed to init logger");
+
+    debug!("main");
 
     sycamore::render(|ctx| {
         view! { ctx,
@@ -105,22 +115,207 @@ fn main() {
 
 #[component]
 fn App<G: Html>(ctx: ScopeRef) -> View<G> {
-    let app_state = AppState {
-        todos: create_rc_signal(Vec::new()),
-        filter: create_rc_signal(Filter::default()),
-        next_id: Cell::new(0),
-    };
+    debug!("init App component");
 
-    ctx.provide_context(app_state);
+    // let app_state = AppState {
+    //     todos: create_rc_signal(Vec::new()),
+    //     filter: create_rc_signal(Filter::default()),
+    //     next_id: Cell::new(0),
+    // };
+    //
+    // ctx.provide_context(app_state);
 
     view! { ctx,
-        div(class="todomvc-wrapper") {
-            section(class="todoapp") {
-                Header {}
-                List {}
-                Footer {}
+        BestAction {}
+
+        // div(class="todomvc-wrapper") {
+        //     section(class="todoapp") {
+        //         Header {}
+        //         List {}
+        //         Footer {}
+        //     }
+        //     Copyright {}
+        // }
+    }
+}
+
+fn empty_to_opt(s: Rc<String>) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.as_ref().clone())
+    }
+}
+
+#[derive(Prop)]
+struct ActionValueRowProps {
+    row: ActionValue,
+    dice_table: DieKindTable,
+}
+
+#[component]
+fn ActionValueRow<G: Html>(ctx: ScopeRef, props: ActionValueRowProps) -> View<G> {
+    debug!("init ActionValueRow component");
+
+    let cols = View::new_fragment(
+        props
+            .row
+            .to_row_cells(&props.dice_table)
+            .into_iter()
+            .map(|col| {
+                view! { ctx,
+                    td {
+                        (col)
+                    }
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    view! { ctx,
+        (cols)
+    }
+}
+
+#[derive(Prop)]
+struct ActionValuesTableProps<'a> {
+    rows: &'a ReadSignal<Vec<ActionValue>>,
+    dice_table: &'a ReadSignal<DieKindTable>,
+}
+
+#[component]
+fn ActionValuesTable<'a, G: Html>(ctx: ScopeRef<'a>, props: ActionValuesTableProps<'a>) -> View<G> {
+    debug!("init ActionValuesTable component");
+
+    let dice_table = *props.dice_table.get();
+
+    view! { ctx,
+        table {
+            Indexed {
+                iterable: props.rows,
+                view: move |ctx, row| {
+                    view! { ctx,
+                        tr {
+                            ActionValueRow {
+                                row: row,
+                                dice_table: dice_table,
+                            }
+                        }
+                    }
+                },
             }
-            Copyright {}
+        }
+    }
+}
+
+#[component]
+fn BestAction<G: Html>(ctx: ScopeRef) -> View<G> {
+    debug!("init BestAction component");
+
+    let round_total_input = ctx.create_node_ref();
+    let round_total_value = ctx.create_signal(String::new());
+
+    let target_score_input = ctx.create_node_ref();
+    let target_score_value = ctx.create_signal(String::new());
+
+    let rolled_dice_input = ctx.create_node_ref();
+    let rolled_dice_value = ctx.create_signal(String::new());
+
+    let all_dice_input = ctx.create_node_ref();
+    let all_dice_value = ctx.create_signal(String::new());
+
+    let cmd_out = ctx.create_signal(BestActionCommandOutput::default());
+
+    // hit enter in any input
+    // -> parse inputs (for now)
+    // -> submit job
+    let handle_submit = |event: Event| {
+        let event: KeyboardEvent = event.unchecked_into();
+        let key = event.key();
+
+        trace!("BestAction::handle_submit: event.key: {key}");
+
+        if key != "Enter" {
+            return;
+        }
+
+        let round_total = round_total_value.get().as_ref().clone();
+        let target_score = empty_to_opt(target_score_value.get());
+        let rolled_dice = rolled_dice_value.get().as_ref().clone();
+        let all_dice = empty_to_opt(all_dice_value.get());
+
+        debug!("BestAction::handle_submit: round_total: '{round_total}', target_score: {target_score:?}, rolled_dice: '{rolled_dice}', all_dice: {all_dice:?}");
+
+        let maybe_cmd = BestActionCommand::try_from_str_args(
+            &round_total,
+            target_score.as_deref(),
+            &rolled_dice,
+            all_dice.as_deref(),
+        );
+
+        let cmd = match maybe_cmd {
+            Ok(cmd) => {
+                debug!("BestAction::handle_submit: cmd: {cmd:?}");
+                cmd
+            }
+            Err(err) => {
+                warn!("BestAction::handle_submit: invalid cmd args: {err}");
+                return;
+            }
+        };
+
+        let out = match cmd.run() {
+            Ok(out) => {
+                debug!("BestAction::handle_submit: out: {out}");
+                out
+            }
+            Err(err) => {
+                warn!("BestAction::handle_submit: error running cmd: {err}");
+                return;
+            }
+        };
+
+        cmd_out.set(out);
+    };
+
+    let rows: &ReadSignal<Vec<ActionValue>> =
+        ctx.create_memo(|| cmd_out.get().action_values.0.clone());
+    let dice_table: &ReadSignal<DieKindTable> = ctx.create_memo(|| cmd_out.get().dice_table);
+
+    view! { ctx,
+        div(class="kcddice-inputs") {
+            input(
+                ref=target_score_input,
+                placeholder="4000",
+                bind:value=target_score_value,
+                on:keyup=handle_submit,
+            )
+
+            input(
+                ref=all_dice_input,
+                placeholder="s:3 hk:2 o:1",
+                bind:value=all_dice_value,
+                on:keyup=handle_submit,
+            )
+
+            input(
+                ref=round_total_input,
+                placeholder="0",
+                bind:value=round_total_value,
+                on:keyup=handle_submit,
+            )
+
+            input(
+                ref=rolled_dice_input,
+                placeholder="1 1hk 2 3o 3 5hk",
+                bind:value=rolled_dice_value,
+                on:keyup=handle_submit,
+            )
+        }
+
+        ActionValuesTable {
+            rows: rows,
+            dice_table: dice_table,
         }
     }
 }

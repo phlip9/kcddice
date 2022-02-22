@@ -23,10 +23,10 @@
 mod macros;
 
 pub mod cli;
-mod dice;
+pub mod dice;
 mod multiset;
 mod parse;
-mod search;
+pub mod search;
 
 use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
 
