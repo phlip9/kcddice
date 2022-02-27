@@ -1,5 +1,5 @@
 use kcddice::{
-    cli::{BestActionCommand, BestActionCommandOutput, Command},
+    cli::{BestActionCommand, BestActionCommandOutput, Command, Metrics},
     dice::DieKindTable,
     search::ActionValue,
 };
@@ -126,7 +126,60 @@ fn App<G: Html>(ctx: ScopeRef) -> View<G> {
     // ctx.provide_context(app_state);
 
     view! { ctx,
-        BestAction {}
+        // central container
+        div(class="page-wrapper") {
+            header {
+                h1(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/logo-kcd.svg#logo-kcd\"/></svg>")
+                h2 {
+                    i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+                    "optimal dice strategy"
+                    i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+                }
+            }
+
+            main {
+                section(id="inputs-page") {
+                    form(id="best-action-form") {
+                        hr(class="page-lines")
+
+                        div(class="input-wrapper") {
+                            label(for="starting-dice") { "starting dice" }
+                            input(id="starting-dice", name="starting-dice", value="s:3 hk:2 o:1")
+                        }
+                        div(class="input-wrapper") {
+                            label(for="total-score") { "total score" }
+                            input(id="total-score", name="total-score", value="1500")
+                            span(id="total-max-sep") { "/" }
+                            input(id="max-score", name="max-score", value="4000")
+                        }
+                        div(class="input-wrapper") {
+                            label(for="round-score") { "round score" }
+                            input(id="round-score", name="round-score", value="550")
+                        }
+                        div(class="input-wrapper") {
+                            label(for="rolled-dice") { "rolled dice" }
+                            input(id="rolled-dice", name="rolled-dice", value="1 1hk 3 5hk 6 6o")
+                        }
+
+                        hr(class="page-lines")
+
+                        button(id="best-action-submit", name="best-action-submit", value="best action", type="submit") {
+                            "best action"
+                        }
+                    }
+                }
+                section(id="output") {
+                    "hold"
+                }
+            }
+        }
+
+        // build classic form { (label, input) }
+        // bind input values
+        // hook form submission, event.preventDefault
+        // pull out input values from binds
+
+        // BestAction {}
 
         // div(class="todomvc-wrapper") {
         //     section(class="todoapp") {
@@ -144,6 +197,29 @@ fn empty_to_opt(s: Rc<String>) -> Option<String> {
         None
     } else {
         Some(s.as_ref().clone())
+    }
+}
+
+#[component]
+fn MetricsList<'a, G: Html>(ctx: ScopeRef<'a>, metrics: &'a ReadSignal<Metrics>) -> View<G> {
+    debug!("init MetricsList component");
+
+    let metrics = ctx.create_memo(|| metrics.get().0.clone());
+
+    view! { ctx,
+        ul {
+            Indexed {
+                iterable: metrics,
+                view: |ctx, metric_row| {
+                    view! { ctx,
+                        li {
+                            span { (metric_row.0) }
+                            span { (metric_row.1) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -278,9 +354,9 @@ fn BestAction<G: Html>(ctx: ScopeRef) -> View<G> {
         cmd_out.set(out);
     };
 
-    let rows: &ReadSignal<Vec<ActionValue>> =
-        ctx.create_memo(|| cmd_out.get().action_values.0.clone());
-    let dice_table: &ReadSignal<DieKindTable> = ctx.create_memo(|| cmd_out.get().dice_table);
+    let rows = ctx.create_memo(|| cmd_out.get().action_values.0.clone());
+    let dice_table = ctx.create_memo(|| cmd_out.get().dice_table);
+    let metrics = ctx.create_memo(|| cmd_out.get().metrics.clone());
 
     view! { ctx,
         div(class="kcddice-inputs") {
@@ -317,6 +393,8 @@ fn BestAction<G: Html>(ctx: ScopeRef) -> View<G> {
             rows: rows,
             dice_table: dice_table,
         }
+
+        MetricsList(metrics)
     }
 }
 

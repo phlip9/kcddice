@@ -85,7 +85,7 @@ impl Args {
 /////////////
 
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct Metrics(Vec<(String, String)>);
+pub struct Metrics(pub Vec<(String, String)>);
 
 impl Metrics {
     pub fn new() -> Self {

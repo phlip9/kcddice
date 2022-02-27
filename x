@@ -5,7 +5,8 @@ set -e
 function usage() {
   echo "x [option ...] subcommand"
   echo ""
-  echo "· x build-wasm - build the wasm sub-project"
+  # echo "· x build-wasm - build the wasm sub-project"
+  echo "· x build-www - build the www sub-project"
   echo "· x run - run the cli"
   echo "· x run-perf - run the cli inside perf"
   echo "· x repl-rs - open an evcxr repl with some helpers"
@@ -13,20 +14,21 @@ function usage() {
 }
 
 case "$1" in
-  build-wasm)
-    wasm-pack build \
-      --no-typescript \
-      --release \
-      --mode normal \
-      --target bundler \
-      kcddice-wasm
-    ;;
+  # build-wasm)
+  #   wasm-pack build \
+  #     --no-typescript \
+  #     --release \
+  #     --mode normal \
+  #     --target bundler \
+  #     kcddice-wasm
+  #   ;;
 
   build-www)
-    cd kcddice-www
-    npm exec -- webpack \
-      --config webpack.config.js \
-      --mode production
+    trunk build --release -- kcddice-www/index.html
+    ;;
+
+  watch-www)
+    cargo watch --ignore kcddice-www/dist -s "./x build-www && http kcddice-www/dist"
     ;;
 
   run)
