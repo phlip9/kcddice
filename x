@@ -25,10 +25,16 @@ case "$1" in
 
   build-www)
     trunk build --release -- kcddice-www/index.html
+
+    cp kcddice-www/dist/index.html kcddice-www/dist/index.pre.html 
+    cargo run --bin render < kcddice-www/dist/index.pre.html > kcddice-www/dist/index.html
     ;;
 
   watch-www)
-    cargo watch --ignore kcddice-www/dist -s "./x build-www && http kcddice-www/dist"
+    # for some reason, this http crate has problems serving assets. like they're
+    # flaky idk...
+    # cargo watch --ignore kcddice-www/dist -s "./x build-www && http kcddice-www/dist"
+    cargo watch --ignore kcddice-www/dist -s "./x build-www && python3 -m http.server --bind 0.0.0.0 --directory kcddice-www/dist"
     ;;
 
   run)
