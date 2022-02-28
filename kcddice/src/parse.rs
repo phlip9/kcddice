@@ -246,6 +246,11 @@ impl DiceVec {
         }
         set
     }
+
+    pub fn to_string_clean(&self) -> String {
+        use itertools::Itertools;
+        self.0.iter().map(|die| format!("{}", die)).join(" ")
+    }
 }
 
 impl FromStr for DiceVec {

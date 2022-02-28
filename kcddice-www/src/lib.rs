@@ -1,10 +1,11 @@
 use kcddice::{
     cli::{BestActionCommand, BestActionCommandOutput, Command, Metrics},
     dice::DieKindTable,
-    search::ActionValue,
+    parse,
+    search::{Action, ActionValue},
 };
 use log::{debug, trace, warn};
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, str::FromStr};
 use sycamore::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, HtmlInputElement, KeyboardEvent};
@@ -114,52 +115,11 @@ pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
     view! { ctx,
         // central container
         div(class="page-wrapper") {
-            header {
-                h1(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/logo-kcd.svg#logo-kcd\"/></svg>")
-                h2 {
-                    i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
-                    "optimal dice strategy"
-                    i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
-                }
-            }
+            Title {}
 
             main {
                 section(id="inputs-page") {
-                    form(id="best-action-form") {
-                        hr(class="page-lines")
-
-                        div(class="input-wrapper") {
-                            label(for="starting-dice") { "starting dice" }
-                            input(id="starting-dice", name="starting-dice", value="s:3 hk:2 o:1")
-                        }
-                        div(class="input-wrapper") {
-                            label(for="total-score") { "total score" }
-                            input(id="total-score", name="total-score", value="1500")
-                            span(id="total-max-sep") { "/" }
-                            input(id="max-score", name="max-score", value="4000")
-                        }
-                        div(class="input-wrapper") {
-                            label(for="round-score") { "round score" }
-                            input(id="round-score", name="round-score", value="550")
-                        }
-                        div(class="input-wrapper") {
-                            label(for="rolled-dice") { "rolled dice" }
-                            input(id="rolled-dice", name="rolled-dice", value="1 1hk 3 5hk 6 6o")
-                        }
-
-                        hr(class="page-lines")
-
-                        button(id="best-action-submit", name="best-action-submit", value="best action", type="submit") {
-                            "best action"
-                        }
-                    }
-
-                    section(id="output") {
-                        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
-                        span(id="output-action") { "Hold" }
-                        span(id="output-dice") { "1 1 1hk 5 5hk 5o" }
-                        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
-                    }
+                    BestActionPage {}
                 }
             }
         }
@@ -179,6 +139,108 @@ pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
         //     }
         //     Copyright {}
         // }
+    }
+}
+
+#[component]
+fn Title<G: Html>(ctx: ScopeRef) -> View<G> {
+    view! { ctx,
+        header {
+            h1(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/logo-kcd.svg#logo-kcd\"/></svg>")
+            h2 {
+                i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+                "optimal dice strategy"
+                i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+            }
+        }
+    }
+}
+
+#[component]
+fn BestActionPage<G: Html>(ctx: ScopeRef) -> View<G> {
+    let dice_set = parse::DiceSet::from_str("s:3 hk:2 o:1").unwrap();
+    let dice_table = dice_set.to_table();
+    let dice_vec = parse::DiceVec::from_str("1").unwrap();
+    let dice_vec = dice_vec.to_compact_form(&dice_table);
+    let action = Action::Roll(dice_vec);
+    let maybe_output = Some((action, dice_table));
+    let maybe_output = ctx.create_signal(maybe_output);
+
+    view! { ctx,
+        form(id="best-action-form") {
+            hr(class="page-lines")
+
+            div(class="input-wrapper") {
+                label(for="starting-dice") { "starting dice" }
+                input(id="starting-dice", name="starting-dice", value="s:3 hk:2 o:1")
+            }
+            div(class="input-wrapper") {
+                label(for="total-score") { "total score" }
+                input(id="total-score", name="total-score", value="1500")
+                span(id="total-max-sep") { "/" }
+                input(id="max-score", name="max-score", value="4000")
+            }
+            div(class="input-wrapper") {
+                label(for="round-score") { "round score" }
+                input(id="round-score", name="round-score", value="550")
+            }
+            div(class="input-wrapper") {
+                label(for="rolled-dice") { "rolled dice" }
+                input(id="rolled-dice", name="rolled-dice", value="1 1hk 3 5hk 6 6o")
+            }
+
+            hr(class="page-lines")
+
+            button(id="best-action-submit", name="best-action-submit", value="best action", type="submit") {
+                "best action"
+            }
+        }
+
+        BestActionOutput(maybe_output)
+    }
+}
+
+#[component]
+fn BestActionOutput<'a, G: Html>(
+    ctx: ScopeRef<'a>,
+    maybe_output: &'a ReadSignal<Option<(Action, DieKindTable)>>,
+) -> View<G> {
+    let fleur_right = view! { ctx,
+        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+    };
+    let fleur_left = view! { ctx,
+        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+    };
+
+    let (output_class, output_view) = match maybe_output.get().as_ref() {
+        None => ("searching", View::empty()),
+        Some((Action::Pass, _)) => {
+            let output_view = view! { ctx,
+                (fleur_right)
+                span(id="output-action") { "Pass" }
+                (fleur_left)
+            };
+            ("", output_view)
+        }
+        Some((Action::Roll(dice), dice_table)) => {
+            let dice = parse::DiceVec::from_compact_form(dice_table, *dice);
+            let dice_str = dice.to_string_clean();
+
+            let output_view = view! { ctx,
+                (fleur_right)
+                span(id="output-action") { "Hold" }
+                span(id="output-dice") { (dice_str) }
+                (fleur_left)
+            };
+
+            ("", output_view)
+        }
+    };
+
+    view! { ctx,
+        section(id="output", class=output_class) {
+            (output_view)
+        }
     }
 }
 

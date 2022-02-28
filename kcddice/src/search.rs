@@ -104,6 +104,7 @@ pub enum Action {
     /// ending their turn and scoring their current round total + the currently
     /// rolled dice score.
     Pass,
+    // TODO(philiphayes): rename to Hold?
     /// If there is at least one scoring die and at least 2 dice left, the player
     /// can choose to hold some non-empty subset of scoring dice and re-roll the
     /// rest. The held dice score is added to their current round total.

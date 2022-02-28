@@ -25,7 +25,7 @@ mod macros;
 pub mod cli;
 pub mod dice;
 mod multiset;
-mod parse;
+pub mod parse;
 pub mod search;
 
 use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
