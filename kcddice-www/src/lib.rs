@@ -153,9 +153,13 @@ pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
                             "best action"
                         }
                     }
-                }
-                section(id="output") {
-                    "hold"
+
+                    section(id="output") {
+                        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+                        span(id="output-action") { "Hold" }
+                        span(id="output-dice") { "1 1 1hk 5 5hk 5o" }
+                        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+                    }
                 }
             }
         }

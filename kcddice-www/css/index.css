@@ -1,9 +1,12 @@
 :root {
   --color-off-white: hsl(60, 4%, 85%);
   --color-tan: hsl(8, 59%, 70%);
+  --page-width: 540px;
   --page-inner-pad: 4rem;
   --input-pad: 1rem;
   --page-border-radius: 4px;
+  --output-decor-size: 1.25rem;
+  --output-decor-pad: 2.5rem;
 }
 
 @font-face {
@@ -23,8 +26,20 @@ body {
   background-position: top 20% left 50%;
 }
 
+/* viewport vignette */
+body::before {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  box-shadow: 0 0 15rem hsl(10, 19%, 5%, 25%) inset;
+}
+
 .page-wrapper {
-  width: 540px;
+  width: var(--page-width);
   margin: 0 auto;
 }
 
@@ -84,6 +99,8 @@ header > h2 > i:nth-child(2) > svg {
   border-radius: var(--page-border-radius);
   box-shadow: 0px 5px 20px 2px rgba(0, 0, 0, 0.5);
   padding-top: 1.5rem;
+
+  margin-bottom: 8rem;
 }
 
 #inputs-page::after {
@@ -203,4 +220,57 @@ header > h2 > i:nth-child(2) > svg {
   background-position-x: right;
   background-position-y: -0.2rem;
   background-repeat: no-repeat;
+}
+
+#output {
+  /* min-height: 8rem; */
+  width: calc(var(--page-width) - 2 * (var(--page-inner-pad) + var(--input-pad)));
+  margin-top: 2.75rem;
+  padding: 0 calc(var(--page-inner-pad) + var(--input-pad));
+  
+  /* want the text be underneath the page */
+  position: absolute;
+  z-index: -1;
+
+  /* space the two text pieces evenly */
+  display: flex;
+  align-items: center;
+}
+
+#output > i > svg {
+  fill: var(--color-tan);
+  height: var(--output-decor-size);
+  width: var(--output-decor-size);
+  padding-top: 0.5rem;
+}
+
+#output > i:nth-of-type(1) > svg {
+  margin-left: calc(-1 * var(--output-decor-pad));
+}
+
+#output > i:nth-of-type(2) > svg {
+  margin-right: calc(-1 * (var(--output-decor-pad) + var(--output-decor-size)));
+  padding-left: var(--output-decor-size);
+}
+
+#output-action {
+  font-family: b, serif;
+  font-weight: normal;
+  font-size: 2.125rem;
+  line-height: 2.75rem;
+  letter-spacing: 0.04rem;
+  color: var(--color-tan);
+}
+
+#output-dice {
+  font-family: a, serif;
+  font-weight: normal;
+  font-size: 2.125rem;
+  line-height: 2.5rem;
+  letter-spacing: -0.05rem;
+  /* width: 100%; */
+  /* text-align: right; */
+  margin-left: 2rem;
+  padding-bottom: 0.2rem;
+  color: hsla(12, 60%, 57%, 100%);
 }
