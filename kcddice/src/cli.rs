@@ -4,7 +4,7 @@ use crate::{
     search::{
         p_rv1_lte_rv2, Action, ActionValue, Context, MarkovMatrix, NormalizedStateAction, State,
     },
-    DEFAULT_TARGET_SCORE,
+    DEFAULT_MAX_SCORE, DEFAULT_TOTAL_SCORE,
 };
 use pico_args;
 use std::{fmt, str::FromStr};
@@ -127,27 +127,38 @@ pub trait Command: Sized {
 
 #[derive(Debug)]
 pub struct BestActionCommand {
-    round_total: u16,
-    target_score: u16,
+    starting_dice: parse::DiceSet,
+    total_score: u16,
+    max_score: u16,
+    round_score: u16,
     rolled_dice: parse::DiceVec,
-    all_dice: parse::DiceSet,
 }
 
 impl BestActionCommand {
     pub fn try_from_str_args(
-        round_total: &str,
-        target_score: Option<&str>,
+        starting_dice: Option<&str>,
+        total_score: Option<&str>,
+        max_score: Option<&str>,
+        round_score: &str,
         rolled_dice: &str,
-        all_dice: Option<&str>,
     ) -> Result<Self, String> {
         let cmd = Self {
-            round_total: parse_req(round_total)?,
-            target_score: parse_opt(target_score)?.unwrap_or(DEFAULT_TARGET_SCORE),
+            starting_dice: parse_opt(starting_dice)?
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            total_score: parse_opt(total_score)?.unwrap_or(DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt(max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
+            round_score: parse_req(round_score)?,
             rolled_dice: parse_req(rolled_dice)?,
-            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
-        cmd.all_dice
+        if cmd.total_score >= cmd.max_score {
+            return Err(format!(
+                "the total score ({}) must be less than the max score ({})",
+                cmd.total_score, cmd.max_score
+            ));
+        }
+
+        cmd.starting_dice
             .validate_init_set(&cmd.rolled_dice.to_die_set())?;
 
         Ok(cmd)
@@ -159,19 +170,22 @@ impl Command for BestActionCommand {
 kcddice best-action - compute the best action to take in a round
 
 USAGE:
-    kcddice best-action [option ...] <round-total> <rolled-dice>
+    kcddice best-action [option ...] <round-score> <rolled-dice>
 
 EXAMPLES:
     kcddice best-action 550 [1,1,2,3,5,6]
 
 OPTIONS:
-    · --target-score / -t score (default: 4000)
-      The score needed to win the game
+    · --starting-dice / -s [s:n,hk:m,o:l,..] (default: [s:6])
+      The set of dice we started the game with.
+      For example, 3 Standard dice, 2 Heavenly Kingdom dice, and 1 Odd die would
+      be formatted as `-s [s:3,hk:2,o:1]`
 
-    · --die-kinds / -k [s:n,hk:m,o:n,..] (default: [s:6])
-      The kinds of dice we're using this game.
-      For example, using 3 Standard, 2 HeavenlyKingdom, 1 Odd would be formatted
-      as -k [s:3,hk:2,o:1]
+    · --total-score / -t score (default: 0)
+      Our current total score, accumulated from previous rounds.
+
+    · --max-score / -m score (default: 4000)
+      The score needed to win the game.
 ";
 
     type Output = BestActionCommandOutput;
@@ -179,26 +193,30 @@ OPTIONS:
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
-        let target_score = args.opt_value(["-t", "--target-score"])?;
-        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
-        let round_total = args.free_value()?;
+        let starting_dice = args.opt_value(["-s", "--starting-dice"])?;
+        let total_score = args.opt_value(["-t", "--total-score"])?;
+        let max_score = args.opt_value(["-m", "--max-score"])?;
+        let round_score = args.free_value()?;
         let rolled_dice = args.free_value()?;
         args.expect_finished()?;
 
         Self::try_from_str_args(
-            &round_total,
-            target_score.as_deref(),
+            starting_dice.as_deref(),
+            total_score.as_deref(),
+            max_score.as_deref(),
+            &round_score,
             &rolled_dice,
-            all_dice.as_deref(),
         )
     }
 
     fn run(self) -> Result<Self::Output, String> {
-        let (dice_table, all_dice) = self.all_dice.to_compact_form();
-        let mut ctxt = Context::new(dice_table, all_dice);
+        let (dice_table, starting_dice) = self.starting_dice.to_compact_form();
+        let mut ctxt = Context::new(dice_table, starting_dice);
+
+        let target_score = self.max_score - self.total_score;
 
         let rolled_dice = self.rolled_dice.to_compact_form(&dice_table);
-        let state = State::new(self.round_total, self.target_score, rolled_dice);
+        let state = State::new(self.round_score, target_score, rolled_dice);
 
         let start_time = Instant::now();
         let action_values = state.actions_by_expected_value(&mut ctxt);

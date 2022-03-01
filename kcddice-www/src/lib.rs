@@ -8,7 +8,7 @@ use log::{debug, trace, warn};
 use std::{cell::Cell, rc::Rc, str::FromStr};
 use sycamore::prelude::*;
 use wasm_bindgen::JsCast;
-use web_sys::{Event, HtmlInputElement, KeyboardEvent};
+use web_sys::{Event, HtmlButtonElement, HtmlInputElement, KeyboardEvent};
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Todo {
@@ -100,9 +100,47 @@ impl AppState {
     }
 }
 
+#[derive(Debug, Prop)]
+pub struct AppProps<'a> {
+    best_action_props: BestActionPageProps<'a>,
+}
+
+impl<'a> AppProps<'a> {
+    pub fn init_placeholders(ctx: ScopeRef<'a>) -> Self {
+        let starting_dice_str = "s:3 hk:2 o:1";
+        let dice_set = parse::DiceSet::from_str(starting_dice_str).unwrap();
+        let dice_table = dice_set.to_table();
+
+        let starting_dice_str = ctx.create_signal(starting_dice_str.to_string());
+        let total_score_str = ctx.create_signal("1500".to_string());
+        let max_score_str = ctx.create_signal("4000".to_string());
+        let round_score_str = ctx.create_signal("550".to_string());
+        let rolled_dice_str = ctx.create_signal("1 1hk 3 5hk 6 6o".to_string());
+
+        let dice_vec = parse::DiceVec::from_str("1").unwrap();
+        let dice_vec = dice_vec.to_compact_form(&dice_table);
+        let action = Action::Roll(dice_vec);
+        let maybe_output = Some((action, dice_table));
+        let maybe_output = ctx.create_signal(maybe_output);
+
+        AppProps {
+            best_action_props: BestActionPageProps {
+                starting_dice_str,
+                total_score_str,
+                max_score_str,
+                round_score_str,
+                rolled_dice_str,
+                maybe_output,
+            },
+        }
+    }
+}
+
 #[component]
-pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
-    debug!("init App component");
+pub fn App<'a, G: Html>(ctx: ScopeRef<'a>, props: AppProps<'a>) -> View<G> {
+    // pub fn App<'a, G: Html>(ctx: ScopeRef<'a>) -> View<G> {
+    debug!("init App component: props: {:?}", props);
+    // debug!("init App component");
 
     // let app_state = AppState {
     //     todos: create_rc_signal(Vec::new()),
@@ -119,7 +157,8 @@ pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
 
             main {
                 section(id="inputs-page") {
-                    BestActionPage {}
+                    BestActionPage(props.best_action_props)
+                    // BestActionPage {}
                 }
             }
         }
@@ -143,60 +182,215 @@ pub fn App<G: Html>(ctx: ScopeRef) -> View<G> {
 }
 
 #[component]
+fn FleurRight<G: Html>(ctx: ScopeRef) -> View<G> {
+    trace!("FleurRight: init");
+
+    view! { ctx,
+        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+    }
+}
+
+#[component]
+fn FleurLeft<G: Html>(ctx: ScopeRef) -> View<G> {
+    trace!("FleurLeft: init");
+
+    view! { ctx,
+        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+    }
+}
+
+#[component]
 fn Title<G: Html>(ctx: ScopeRef) -> View<G> {
+    trace!("Title: init");
+
     view! { ctx,
         header {
             h1(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/logo-kcd.svg#logo-kcd\"/></svg>")
             h2 {
-                i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
+                FleurLeft {}
                 "optimal dice strategy"
-                i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
+                FleurRight {}
             }
         }
     }
 }
 
+// fn to_js_elt<G: GenericNode, T: JsCast>(node_ref: &NodeRef<G>) -> T {
+//     node_ref
+//         .get::<DomNode>()
+//         .inner_element()
+//         .dyn_into::<T>()
+//         .unwrap()
+// }
+//
+// fn to_input_elt<G: GenericNode>(node_ref: &NodeRef<G>) -> HtmlInputElement {
+//     to_js_elt::<G, HtmlInputElement>(node_ref)
+// }
+//
+// fn to_button_elt<G: GenericNode>(node_ref: &NodeRef<G>) -> HtmlButtonElement {
+//     to_js_elt::<G, HtmlButtonElement>(node_ref)
+// }
+
+fn empty_str_to_opt(s: &str) -> Option<&str> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+#[derive(Debug, Prop)]
+pub struct BestActionPageProps<'a> {
+    starting_dice_str: &'a Signal<String>,
+    total_score_str: &'a Signal<String>,
+    max_score_str: &'a Signal<String>,
+    round_score_str: &'a Signal<String>,
+    rolled_dice_str: &'a Signal<String>,
+    maybe_output: &'a Signal<Option<(Action, DieKindTable)>>,
+}
+
 #[component]
-fn BestActionPage<G: Html>(ctx: ScopeRef) -> View<G> {
-    let dice_set = parse::DiceSet::from_str("s:3 hk:2 o:1").unwrap();
-    let dice_table = dice_set.to_table();
-    let dice_vec = parse::DiceVec::from_str("1").unwrap();
-    let dice_vec = dice_vec.to_compact_form(&dice_table);
-    let action = Action::Roll(dice_vec);
-    let maybe_output = Some((action, dice_table));
-    let maybe_output = ctx.create_signal(maybe_output);
+fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>) -> View<G> {
+    // fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>) -> View<G> {
+    trace!("BestActionPage: init");
+
+    let starting_dice_input = ctx.create_node_ref();
+    let total_score_input = ctx.create_node_ref();
+    let max_score_input = ctx.create_node_ref();
+    let round_score_input = ctx.create_node_ref();
+    let rolled_dice_input = ctx.create_node_ref();
+
+    let best_action_submit = ctx.create_node_ref();
+
+    let handle_submit = |event: Event| {
+        trace!("BestActionPage::handle_submit: event: {:?}", event);
+        event.prevent_default();
+        event.stop_immediate_propagation();
+
+        trace!("BestActionPage::handle_submit: maybe_output.set(None)");
+        props.maybe_output.set(None);
+
+        let starting_dice_str = props.starting_dice_str.get();
+        let total_score_str = props.total_score_str.get();
+        let max_score_str = props.max_score_str.get();
+        let round_score_str = props.round_score_str.get();
+        let rolled_dice_str = props.rolled_dice_str.get();
+
+        trace!("BestActionPage::handle_submit: {starting_dice_str}, {total_score_str}/{max_score_str}, {round_score_str}, {rolled_dice_str}");
+
+        let maybe_cmd = BestActionCommand::try_from_str_args(
+            empty_str_to_opt(starting_dice_str.as_str()),
+            empty_str_to_opt(total_score_str.as_str()),
+            empty_str_to_opt(max_score_str.as_str()),
+            round_score_str.as_str(),
+            rolled_dice_str.as_str(),
+        );
+
+        let cmd = match maybe_cmd {
+            Ok(cmd) => {
+                debug!("BestActionPage::handle_submit: cmd: {cmd:?}");
+                cmd
+            }
+            Err(err) => {
+                warn!("BestActionPage::handle_submit: invalid cmd args: {err}");
+                return;
+            }
+        };
+
+        let out = match cmd.run() {
+            Ok(out) => {
+                debug!("BestActionPage::handle_submit: out: {out}");
+                out
+            }
+            Err(err) => {
+                warn!("BestActionPage::handle_submit: error running cmd: {err}");
+                return;
+            }
+        };
+
+        let action = out.action_values.0.first().unwrap().action;
+        let dice_table = out.dice_table;
+
+        let output_str = match action {
+            Action::Pass => "Pass".to_owned(),
+            Action::Roll(dice) => {
+                let dice = parse::DiceVec::from_compact_form(&dice_table, dice);
+                let dice_str = dice.to_string_clean();
+                format!("Hold {dice_str}")
+            }
+        };
+
+        debug!("BestActionPage::handle_submit: output: {output_str}");
+
+        props.maybe_output.set(Some((action, dice_table)));
+        props.starting_dice_str.set("s:6".to_owned());
+    };
 
     view! { ctx,
-        form(id="best-action-form") {
+        form(
+            id="best-action-form",
+            on:submit=handle_submit,
+        ) {
             hr(class="page-lines")
 
             div(class="input-wrapper") {
                 label(for="starting-dice") { "starting dice" }
-                input(id="starting-dice", name="starting-dice", value="s:3 hk:2 o:1")
+                input(
+                    ref=starting_dice_input,
+                    id="starting-dice",
+                    name="starting-dice",
+                    bind:value=props.starting_dice_str,
+                )
             }
             div(class="input-wrapper") {
                 label(for="total-score") { "total score" }
-                input(id="total-score", name="total-score", value="1500")
+                input(
+                    ref=total_score_input,
+                    id="total-score",
+                    name="total-score",
+                    bind:value=props.total_score_str,
+                )
                 span(id="total-max-sep") { "/" }
-                input(id="max-score", name="max-score", value="4000")
+                input(
+                    ref=max_score_input,
+                    id="max-score",
+                    name="max-score",
+                    bind:value=props.max_score_str,
+                )
             }
             div(class="input-wrapper") {
                 label(for="round-score") { "round score" }
-                input(id="round-score", name="round-score", value="550")
+                input(
+                    ref=round_score_input,
+                    id="round-score",
+                    name="round-score",
+                    bind:value=props.round_score_str,
+                )
             }
             div(class="input-wrapper") {
                 label(for="rolled-dice") { "rolled dice" }
-                input(id="rolled-dice", name="rolled-dice", value="1 1hk 3 5hk 6 6o")
+                input(
+                    ref=rolled_dice_input,
+                    id="rolled-dice",
+                    name="rolled-dice",
+                    bind:value=props.rolled_dice_str,
+                )
             }
 
             hr(class="page-lines")
 
-            button(id="best-action-submit", name="best-action-submit", value="best action", type="submit") {
+            button(
+                ref=best_action_submit,
+                id="best-action-submit",
+                name="best-action-submit",
+                value="best action",
+                type="submit",
+            ) {
                 "best action"
             }
         }
 
-        BestActionOutput(maybe_output)
+        BestActionOutput(props.maybe_output)
     }
 }
 
@@ -205,41 +399,42 @@ fn BestActionOutput<'a, G: Html>(
     ctx: ScopeRef<'a>,
     maybe_output: &'a ReadSignal<Option<(Action, DieKindTable)>>,
 ) -> View<G> {
-    let fleur_right = view! { ctx,
-        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-right.svg#fleur-right\"/></svg>")
-    };
-    let fleur_left = view! { ctx,
-        i(dangerously_set_inner_html="<svg><use xlink:href=\"imgs/fleur-left.svg#fleur-left\"/></svg>")
-    };
+    trace!("BestActionOutput: maybe_output: {:?}", maybe_output);
 
-    let (output_class, output_view) = match maybe_output.get().as_ref() {
-        None => ("searching", View::empty()),
-        Some((Action::Pass, _)) => {
-            let output_view = view! { ctx,
-                (fleur_right)
-                span(id="output-action") { "Pass" }
-                (fleur_left)
-            };
-            ("", output_view)
+    let output_class = ctx.create_memo(|| {
+        if maybe_output.get().is_none() {
+            "searching"
+        } else {
+            ""
         }
-        Some((Action::Roll(dice), dice_table)) => {
-            let dice = parse::DiceVec::from_compact_form(dice_table, *dice);
-            let dice_str = dice.to_string_clean();
-
-            let output_view = view! { ctx,
-                (fleur_right)
-                span(id="output-action") { "Hold" }
-                span(id="output-dice") { (dice_str) }
-                (fleur_left)
-            };
-
-            ("", output_view)
-        }
-    };
+    });
 
     view! { ctx,
-        section(id="output", class=output_class) {
-            (output_view)
+        section(id="output", class=output_class.get()) {
+            (match maybe_output.get().as_ref() {
+                None => View::empty(),
+                Some((Action::Pass, _)) => {
+                    let output_view = view! { ctx,
+                        FleurRight {}
+                        span(id="output-action") { "Pass" }
+                        FleurLeft {}
+                    };
+                    output_view
+                }
+                Some((Action::Roll(dice), dice_table)) => {
+                    let dice = parse::DiceVec::from_compact_form(dice_table, *dice);
+                    let dice_str = dice.to_string_clean();
+
+                    let output_view = view! { ctx,
+                        FleurRight {}
+                        span(id="output-action") { "Hold" }
+                        span(id="output-dice") { (dice_str) }
+                        FleurLeft {}
+                    };
+
+                    output_view
+                }
+            })
         }
     }
 }
@@ -375,10 +570,11 @@ fn BestAction<G: Html>(ctx: ScopeRef) -> View<G> {
         debug!("BestAction::handle_submit: round_total: '{round_total}', target_score: {target_score:?}, rolled_dice: '{rolled_dice}', all_dice: {all_dice:?}");
 
         let maybe_cmd = BestActionCommand::try_from_str_args(
-            &round_total,
-            target_score.as_deref(),
-            &rolled_dice,
             all_dice.as_deref(),
+            Some("0"),
+            target_score.as_deref(),
+            &round_total,
+            &rolled_dice,
         );
 
         let cmd = match maybe_cmd {

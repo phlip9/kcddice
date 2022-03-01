@@ -25,9 +25,10 @@ case "$1" in
 
   build-www)
     trunk build --release -- kcddice-www/index.html
+    # trunk build -- kcddice-www/index.html
 
-    cp kcddice-www/dist/index.html kcddice-www/dist/index.pre.html 
-    cargo run --bin render < kcddice-www/dist/index.pre.html > kcddice-www/dist/index.html
+    # cp kcddice-www/dist/index.html kcddice-www/dist/index.pre.html 
+    # cargo run -p kcddice-www --bin render-static < kcddice-www/dist/index.pre.html > kcddice-www/dist/index.html
     ;;
 
   watch-www)

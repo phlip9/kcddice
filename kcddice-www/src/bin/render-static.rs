@@ -1,16 +1,17 @@
-use kcddice_www::App;
-use std::{
-    io::{self, Read, Write},
-    time::Instant,
-};
+use kcddice_www::{App, AppProps};
+use std::io::{self, Read, Write};
 use sycamore::prelude::*;
+use trice::Instant;
 
 // 1. Reads html file from stdin.
 // 2. Looks for a `<!-- HYDRATION-STATION -->` comment.
 // 3. If it's present, replaces it with the main pre-rendered sycamore app
 //    and dumps that to stdout.
 fn main() {
-    eprintln!("kcddice-www::render: start");
+    #[cfg(target_arch = "wasm32")]
+    panic!("render-static util is running in WASM somehow??????????");
+
+    eprintln!("kcddice-www::render-static: start");
     let start = Instant::now();
 
     let mut input = String::new();
@@ -18,10 +19,10 @@ fn main() {
         .read_to_string(&mut input)
         .expect("Failed to read from stdin");
 
+    // find the marker
     let mut parts = input.split("<!-- HYDRATION-STATION -->").fuse();
 
     let (pre, post, end) = (parts.next(), parts.next(), parts.next());
-
     let (output, did_something) = match (pre, post, end) {
         // empty or no marker; do nothing and just return the input.
         (None, _, _) | (Some(_), None, _) => (input, false),
@@ -30,11 +31,13 @@ fn main() {
         (Some(pre), Some(post), None) => {
             let prerender = sycamore::render_to_string(|ctx| {
                 view! { ctx,
-                    App {}
+                    App(AppProps::init_placeholders(ctx))
+                    // App {}
                 }
             });
 
-            ([pre, &prerender, post].join("\n"), true)
+            // stitch everything back together
+            ([pre, &prerender, post].join(""), true)
         }
         (Some(_), Some(_), Some(_)) => panic!("too many hydration markers"),
     };

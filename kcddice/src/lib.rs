@@ -30,7 +30,8 @@ pub mod search;
 
 use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
 
-pub(crate) const DEFAULT_TARGET_SCORE: u16 = 4000;
+pub(crate) const DEFAULT_TOTAL_SCORE: u16 = 0;
+pub(crate) const DEFAULT_MAX_SCORE: u16 = 4000;
 
 ///////////////////
 // Combinatorics //

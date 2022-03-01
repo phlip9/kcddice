@@ -211,6 +211,7 @@ dependencies = [
  "kcddice",
  "log",
  "sycamore",
+ "trice",
  "wasm-bindgen",
  "web-sys",
 ]
