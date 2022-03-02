@@ -235,6 +235,13 @@ header > h2 > i:nth-child(2) > svg {
   /* space the two text pieces evenly */
   display: flex;
   align-items: center;
+
+  /* cool animation to slide output up under the inputs page when searching */
+  transition: margin-top 0.35s ease-in-out;
+}
+
+#output.searching {
+  margin-top: -3rem;
 }
 
 #output > i > svg {

@@ -1,4 +1,9 @@
-use crate::dice::{self, DieKind, DieKindCounts, DieKindTable};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    dice::{self, DieKind, DieKindCounts, DieKindTable},
+    search,
+};
 use std::{collections::BTreeMap, fmt, str::FromStr};
 
 fn str_split_at_safe(s: &str, mid: usize) -> Option<(&str, &str)> {
@@ -9,7 +14,11 @@ fn str_split_at_safe(s: &str, mid: usize) -> Option<(&str, &str)> {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+////////////////////
+// parse::DiceSet //
+////////////////////
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiceSet(BTreeMap<DieKind, u8>);
 
 impl DiceSet {
@@ -156,7 +165,11 @@ impl fmt::Debug for DiceSet {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
+////////////////
+// parse::Die //
+////////////////
+
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Die {
     face: u8,
     kind: DieKind,
@@ -212,7 +225,11 @@ impl fmt::Debug for Die {
     }
 }
 
-#[derive(PartialEq, Eq)]
+////////////////////
+// parse::DiceVec //
+////////////////////
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiceVec(Vec<Die>);
 
 impl DiceVec {
@@ -297,6 +314,56 @@ impl fmt::Display for DiceVec {
 impl fmt::Debug for DiceVec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self)
+    }
+}
+
+///////////////////
+// parse::Action //
+///////////////////
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Action {
+    Pass,
+    Hold(DiceVec),
+}
+
+impl Action {
+    pub fn from_compact_form(table: &DieKindTable, action: search::Action) -> Self {
+        match action {
+            search::Action::Pass => Self::Pass,
+            search::Action::Roll(dice) => Self::Hold(DiceVec::from_compact_form(table, dice)),
+        }
+    }
+
+    pub fn to_action_str(&self) -> &'static str {
+        match self {
+            Self::Pass => "Pass",
+            Self::Hold(_) => "Hold",
+        }
+    }
+
+    pub fn to_maybe_dice_str(&self) -> Option<String> {
+        match self {
+            Self::Pass => None,
+            Self::Hold(dice) => Some(dice.to_string_clean()),
+        }
+    }
+
+    pub fn to_string_parts(&self) -> (&'static str, Option<String>) {
+        (self.to_action_str(), self.to_maybe_dice_str())
+    }
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (action_str, maybe_dice_str) = self.to_string_parts();
+        f.write_str(action_str)?;
+        if let Some(dice_str) = maybe_dice_str {
+            f.write_str(" ")?;
+            f.write_str(&dice_str)
+        } else {
+            Ok(())
+        }
     }
 }
 

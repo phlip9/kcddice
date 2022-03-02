@@ -7,6 +7,7 @@ use crate::{
     DEFAULT_MAX_SCORE, DEFAULT_TOTAL_SCORE,
 };
 use pico_args;
+use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 use tabular::{row, Row, Table};
 // For some reason, `std::time::Instant` doesn't just use `performance.now()` in
@@ -125,7 +126,7 @@ pub trait Command: Sized {
 // BestActionCommand //
 ///////////////////////
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BestActionCommand {
     starting_dice: parse::DiceSet,
     total_score: u16,

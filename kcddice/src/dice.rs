@@ -10,6 +10,7 @@ use proptest::{
     arbitrary::Arbitrary,
     strategy::{BoxedStrategy, Strategy},
 };
+use serde::{Deserialize, Serialize};
 use std::{
     cmp, fmt,
     hash::{Hash, Hasher},
@@ -42,7 +43,7 @@ impl DieDistr {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[allow(clippy::upper_case_acronyms)]
 pub enum DieKind {
     SENTINEL = 0,

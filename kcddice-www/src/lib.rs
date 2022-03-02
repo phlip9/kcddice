@@ -1,3 +1,4 @@
+use futures_util::future;
 use kcddice::{
     cli::{BestActionCommand, BestActionCommandOutput, Command, Metrics},
     dice::DieKindTable,
@@ -5,10 +6,12 @@ use kcddice::{
     search::{Action, ActionValue},
 };
 use log::{debug, trace, warn};
-use std::{cell::Cell, rc::Rc, str::FromStr};
+use std::{cell::Cell, rc::Rc, str::FromStr, time::Duration};
 use sycamore::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, HtmlButtonElement, HtmlInputElement, KeyboardEvent};
+
+pub mod cmd_worker;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Todo {
@@ -108,8 +111,6 @@ pub struct AppProps<'a> {
 impl<'a> AppProps<'a> {
     pub fn init_placeholders(ctx: ScopeRef<'a>) -> Self {
         let starting_dice_str = "s:3 hk:2 o:1";
-        let dice_set = parse::DiceSet::from_str(starting_dice_str).unwrap();
-        let dice_table = dice_set.to_table();
 
         let starting_dice_str = ctx.create_signal(starting_dice_str.to_string());
         let total_score_str = ctx.create_signal("1500".to_string());
@@ -118,10 +119,12 @@ impl<'a> AppProps<'a> {
         let rolled_dice_str = ctx.create_signal("1 1hk 3 5hk 6 6o".to_string());
 
         let dice_vec = parse::DiceVec::from_str("1").unwrap();
-        let dice_vec = dice_vec.to_compact_form(&dice_table);
-        let action = Action::Roll(dice_vec);
-        let maybe_output = Some((action, dice_table));
-        let maybe_output = ctx.create_signal(maybe_output);
+        let best_action = parse::Action::Hold(dice_vec);
+
+        let best_action_state = BestActionOutputState {
+            is_searching: create_rc_signal(false),
+            best_action: create_rc_signal(best_action),
+        };
 
         AppProps {
             best_action_props: BestActionPageProps {
@@ -130,7 +133,7 @@ impl<'a> AppProps<'a> {
                 max_score_str,
                 round_score_str,
                 rolled_dice_str,
-                maybe_output,
+                best_action_state,
             },
         }
     }
@@ -239,14 +242,14 @@ fn empty_str_to_opt(s: &str) -> Option<&str> {
     }
 }
 
-#[derive(Debug, Prop)]
+#[derive(Clone, Debug, Prop)]
 pub struct BestActionPageProps<'a> {
     starting_dice_str: &'a Signal<String>,
     total_score_str: &'a Signal<String>,
     max_score_str: &'a Signal<String>,
     round_score_str: &'a Signal<String>,
     rolled_dice_str: &'a Signal<String>,
-    maybe_output: &'a Signal<Option<(Action, DieKindTable)>>,
+    best_action_state: BestActionOutputState,
 }
 
 #[component]
@@ -262,19 +265,20 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
 
     let best_action_submit = ctx.create_node_ref();
 
-    let handle_submit = |event: Event| {
+    let props_clone = props.clone();
+    let handle_submit = move |event: Event| {
         trace!("BestActionPage::handle_submit: event: {:?}", event);
         event.prevent_default();
         event.stop_immediate_propagation();
 
-        trace!("BestActionPage::handle_submit: maybe_output.set(None)");
-        props.maybe_output.set(None);
+        trace!("BestActionPage::handle_submit: is_searching.set(true)");
+        props_clone.best_action_state.is_searching.set(true);
 
-        let starting_dice_str = props.starting_dice_str.get();
-        let total_score_str = props.total_score_str.get();
-        let max_score_str = props.max_score_str.get();
-        let round_score_str = props.round_score_str.get();
-        let rolled_dice_str = props.rolled_dice_str.get();
+        let starting_dice_str = props_clone.starting_dice_str.get();
+        let total_score_str = props_clone.total_score_str.get();
+        let max_score_str = props_clone.max_score_str.get();
+        let round_score_str = props_clone.round_score_str.get();
+        let rolled_dice_str = props_clone.rolled_dice_str.get();
 
         trace!("BestActionPage::handle_submit: {starting_dice_str}, {total_score_str}/{max_score_str}, {round_score_str}, {rolled_dice_str}");
 
@@ -297,34 +301,35 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
             }
         };
 
-        let out = match cmd.run() {
-            Ok(out) => {
-                debug!("BestActionPage::handle_submit: out: {out}");
-                out
-            }
-            Err(err) => {
-                warn!("BestActionPage::handle_submit: error running cmd: {err}");
-                return;
-            }
-        };
+        let best_action_state = props_clone.best_action_state.clone();
+        sycamore::futures::spawn_local(async move {
+            trace!("BestActionPage::handle_submit::async: sending request to worker");
 
-        let action = out.action_values.0.first().unwrap().action;
-        let dice_table = out.dice_table;
+            // ensure the result only fulfills at least 0.35sec after we start,
+            // to give the slide-up animation time to complete.
+            let f_sleep = gloo_timers::future::sleep(Duration::from_secs_f32(0.35));
+            let f_request = crate::cmd_worker::CmdWorker::request(cmd);
+            let (_, result) = future::join(f_sleep, f_request).await;
 
-        let output_str = match action {
-            Action::Pass => "Pass".to_owned(),
-            Action::Roll(dice) => {
-                let dice = parse::DiceVec::from_compact_form(&dice_table, dice);
-                let dice_str = dice.to_string_clean();
-                format!("Hold {dice_str}")
-            }
-        };
+            let best_action = match result {
+                Ok(best_action) => {
+                    debug!("BestActionPage::handle_submit::async: successful response from worker: {best_action}");
+                    best_action
+                }
+                Err(err) => {
+                    warn!(
+                        "BestActionPage::handle_submit::async: error response from worker: {err}"
+                    );
+                    return;
+                }
+            };
 
-        debug!("BestActionPage::handle_submit: output: {output_str}");
-
-        props.maybe_output.set(Some((action, dice_table)));
-        props.starting_dice_str.set("s:6".to_owned());
+            best_action_state.is_searching.set(false);
+            best_action_state.best_action.set(best_action);
+        });
     };
+
+    let best_action_state = props.best_action_state.clone();
 
     view! { ctx,
         form(
@@ -390,51 +395,47 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
             }
         }
 
-        BestActionOutput(props.maybe_output)
+        BestActionOutput(best_action_state)
     }
 }
 
-#[component]
-fn BestActionOutput<'a, G: Html>(
-    ctx: ScopeRef<'a>,
-    maybe_output: &'a ReadSignal<Option<(Action, DieKindTable)>>,
-) -> View<G> {
-    trace!("BestActionOutput: maybe_output: {:?}", maybe_output);
+#[derive(Clone, Debug, Prop)]
+pub struct BestActionOutputState {
+    is_searching: RcSignal<bool>,
+    best_action: RcSignal<parse::Action>,
+}
 
-    let output_class = ctx.create_memo(|| {
-        if maybe_output.get().is_none() {
+#[component]
+fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> View<G> {
+    trace!("BestActionOutput: state: {state:?}");
+
+    let state_clone = state.clone();
+    let output_class = ctx.create_memo(move || {
+        if *state_clone.is_searching.get() {
             "searching"
         } else {
             ""
         }
     });
 
+    let state_clone = state.clone();
+    let action_str = ctx.create_memo(move || state_clone.best_action.get().to_action_str());
+
+    let state_clone = state.clone();
+    let maybe_dice_str = ctx.create_memo(move || state_clone.best_action.get().to_maybe_dice_str());
+
     view! { ctx,
         section(id="output", class=output_class.get()) {
-            (match maybe_output.get().as_ref() {
-                None => View::empty(),
-                Some((Action::Pass, _)) => {
-                    let output_view = view! { ctx,
-                        FleurRight {}
-                        span(id="output-action") { "Pass" }
-                        FleurLeft {}
-                    };
-                    output_view
+            FleurRight {}
+            span(id="output-action") { (action_str.get()) }
+            (if let Some(dice_str) = maybe_dice_str.get().as_ref().clone() {
+                view! { ctx,
+                    span(id="output-dice") { (dice_str) }
                 }
-                Some((Action::Roll(dice), dice_table)) => {
-                    let dice = parse::DiceVec::from_compact_form(dice_table, *dice);
-                    let dice_str = dice.to_string_clean();
-
-                    let output_view = view! { ctx,
-                        FleurRight {}
-                        span(id="output-action") { "Hold" }
-                        span(id="output-dice") { (dice_str) }
-                        FleurLeft {}
-                    };
-
-                    output_view
-                }
+            } else {
+                View::empty()
             })
+            FleurLeft {}
         }
     }
 }
