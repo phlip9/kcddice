@@ -100,7 +100,10 @@ header > h2 > i:nth-child(2) > svg {
   box-shadow: 0px 5px 20px 2px rgba(0, 0, 0, 0.5);
   padding-top: 1.5rem;
 
-  margin-bottom: 8rem;
+  margin-bottom: 15rem;
+
+  /* clip elements that go off the page */
+  overflow-x: hidden;
 }
 
 #inputs-page::after {
@@ -176,10 +179,16 @@ header > h2 > i:nth-child(2) > svg {
   line-height: 2.75rem;
   letter-spacing: -0.05rem;
   color: hsla(12, 62%, 51%, 80%);
+
+  transition: color 0.20s ease-in-out;
+}
+
+.input-wrapper > input:hover, .input-wrapper > input:focus {
+  color: hsla(12, 62%, 40%, 80%);
 }
 
 #total-score {
-  max-width: 17%;
+  max-width: 21%;
 }
 
 #max-score {
@@ -197,13 +206,18 @@ header > h2 > i:nth-child(2) > svg {
   color: hsla(276, 5%, 25%, 50%);
 }
 
+#max-score:hover, #max-score:focus {
+  color: hsla(276, 5%, 10%, 50%);
+}
+
 #best-action-submit {
   /* reset styles */
   all: initial;
 
   margin-top: 0.5rem;
   margin-bottom: 1.5rem;
-  padding-left: calc(var(--page-inner-pad) + var(--input-pad));
+  margin-left: -0.5rem;
+  padding-left: calc(var(--page-inner-pad) + var(--input-pad) + 0.5rem);
   padding-right: calc(var(--page-inner-pad) + var(--input-pad) + 1rem);
   min-height: 3.75rem;
 
@@ -220,6 +234,19 @@ header > h2 > i:nth-child(2) > svg {
   background-position-x: right;
   background-position-y: -0.2rem;
   background-repeat: no-repeat;
+
+  /* filter: dropshadow(0 0 0.5rem hsla(0, 0%, 0%, 40%)); */
+
+  /* animate on hover + focus */
+  transition: transform 0.20s ease-in-out;
+}
+
+#best-action-submit:hover, #best-action-submit:focus {
+  transform: translateX(0.5rem);
+}
+
+#best-action-submit:active {
+  transform: translateX(0rem);
 }
 
 #output {
@@ -232,35 +259,41 @@ header > h2 > i:nth-child(2) > svg {
   position: absolute;
   z-index: -1;
 
-  /* space the two text pieces evenly */
-  display: flex;
-  align-items: center;
-
   /* cool animation to slide output up under the inputs page when searching */
   transition: margin-top 0.35s ease-in-out;
 }
 
 #output.searching {
-  margin-top: -3rem;
+  margin-top: -10rem;
 }
 
-#output > i > svg {
+#output-wrapper {
+  /* space the two text pieces evenly */
+  display: flex;
+  align-items: center;
+}
+
+#output-wrapper-main > i > svg {
   fill: var(--color-tan);
   height: var(--output-decor-size);
   width: var(--output-decor-size);
   padding-top: 0.5rem;
 }
 
-#output > i:nth-of-type(1) > svg {
+#output-wrapper-main > i:nth-of-type(1) > svg {
   margin-left: calc(-1 * var(--output-decor-pad));
 }
 
-#output > i:nth-of-type(2) > svg {
+#output-wrapper-main > i:nth-of-type(2) > svg {
   margin-right: calc(-1 * (var(--output-decor-pad) + var(--output-decor-size)));
   padding-left: var(--output-decor-size);
 }
 
-#output-action {
+#output-wrapper-err {
+  padding-bottom: 2rem;
+}
+
+#output-main {
   font-family: b, serif;
   font-weight: normal;
   font-size: 2.125rem;
@@ -269,7 +302,7 @@ header > h2 > i:nth-child(2) > svg {
   color: var(--color-tan);
 }
 
-#output-dice {
+#output-dice, #output-err {
   font-family: a, serif;
   font-weight: normal;
   font-size: 2.125rem;
@@ -277,7 +310,23 @@ header > h2 > i:nth-child(2) > svg {
   letter-spacing: -0.05rem;
   /* width: 100%; */
   /* text-align: right; */
-  margin-left: 2rem;
   padding-bottom: 0.2rem;
   color: hsla(12, 60%, 57%, 100%);
+}
+
+#output-dice {
+  margin-left: 2rem;
+}
+
+#output-err {
+  /* font-family: a, serif; */
+  /* font-weight: normal; */
+  font-size: 1.75rem;
+  line-height: 2.25rem;
+  /* letter-spacing: -0.05rem; */
+  /* [> width: 100%; <] */
+  /* [> text-align: right; <] */
+  /* margin-left: 2rem; */
+  /* padding-bottom: 0.2rem; */
+  /* color: hsla(12, 60%, 57%, 100%); */
 }

@@ -4,6 +4,9 @@ use log::trace;
 
 fn main() {
     console_error_panic_hook::set_once();
+
+    // Note: console.log's inside the web worker seem to print twice (on firefox
+    // at least).
     console_log::init_with_level(log::Level::Trace).expect("Failed to init logger");
 
     trace!("cmd_worker: init");

@@ -69,14 +69,15 @@ impl DiceSet {
         let ndice = self.ndice();
         if self.ndice() != 6 {
             return Err(format!(
-                "initial die kinds set must contain exactly 6 dice: ndice: {}",
+                "starting dice must contain exactly 6 dice (has {} dice)",
                 ndice
             ));
         }
         if !self.is_superset_of(rolled_set) {
-            return Err(
-                format!("rolled dice can only contain dice from the initial die kinds set: init set: {}, rolled set: {}", self, rolled_set),
-            );
+            return Err(format!(
+                "rolled dice can only contain dice from the starting dice: start: {}, rolled: {}",
+                self, rolled_set
+            ));
         }
 
         Ok(())
@@ -109,38 +110,32 @@ impl FromStr for DiceSet {
             match kind_count_str.split_once(':') {
                 Some((kind_str, count_str)) => {
                     let kind = DieKind::from_memnonic(kind_str)
-                        .ok_or_else(|| format!("didn't recognize die kind: '{}'", kind_str))?;
+                        .ok_or_else(|| format!("didn't recognize die kind: '{kind_str}'"))?;
 
                     if kinds.0.contains_key(&kind) {
                         return Err(format!(
-                            "the dice set can't contain any duplicates: already contains kind: '{}'",
+                            "can't contain any duplicates: already contains kind: '{}'",
                             kind.as_memnonic(),
                         ));
                     }
 
-                    let count = count_str.parse::<u8>().map_err(|err| {
-                        format!("failed to parse die count: '{}', error: {}", count_str, err)
-                    })?;
+                    let count = count_str
+                        .parse::<u8>()
+                        .map_err(|err| format!("die count '{count_str}' is not a digit"))?;
 
                     if !(1..=6).contains(&count) {
-                        return Err(format!(
-                            "die count needs to be in the range [1,6]: '{}'",
-                            count
-                        ));
+                        return Err(format!("die count ({count}) is not between 1 and 6"));
                     }
 
                     kinds.0.insert(kind, count);
                 }
-                None => return Err("".to_string()),
+                None => return Err("can't be empty".to_string()),
             }
         }
 
         let ndice = kinds.ndice();
         if ndice > 6 {
-            return Err(format!(
-                "too many dice in set! expected <= 6, got: {}",
-                ndice
-            ));
+            return Err(format!("too many dice in set: expected <= 6, got: {ndice}"));
         }
 
         Ok(kinds)
@@ -194,22 +189,21 @@ impl FromStr for Die {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         str_split_at_safe(s, 1)
+            .ok_or_else(|| "first character is not valid ascii".to_owned())
             .and_then(|(first, rest)| {
-                let face = first.parse::<u8>().ok()?;
+                let face = first
+                    .parse::<u8>()
+                    .map_err(|_| "die face is not a digit".to_owned())?;
 
                 if (1..=6).contains(&face) {
-                    let kind = DieKind::from_memnonic(rest)?;
-                    Some(Die::new(face, kind))
+                    let kind = DieKind::from_memnonic(rest)
+                        .ok_or_else(|| format!("didn't recognize the die kind: '{rest}'"))?;
+                    Ok(Die::new(face, kind))
                 } else {
-                    None
+                    Err("die face ({face}) is not between 1 and 6".to_owned())
                 }
             })
-            .ok_or_else(|| {
-                format!(
-                    "invalid die string '{}': expected format '<die-face><die-kind>'",
-                    s
-                )
-            })
+            .map_err(|err| format!("invalid die '{s}': {err}"))
     }
 }
 

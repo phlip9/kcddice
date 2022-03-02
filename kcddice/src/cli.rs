@@ -18,15 +18,15 @@ use trice::Instant;
 // String parser helpers //
 ///////////////////////////
 
-fn parse_req<T>(s: &str) -> Result<T, String>
+fn parse_req<T>(label: &'static str, s: &str) -> Result<T, String>
 where
     T: FromStr,
     T::Err: fmt::Display,
 {
-    T::from_str(s).map_err(|err| err.to_string())
+    T::from_str(s).map_err(|err| format!("invalid {label}: {err}"))
 }
 
-fn parse_opt<T>(opt_s: Option<&str>) -> Result<Option<T>, String>
+fn parse_opt<T>(label: &'static str, opt_s: Option<&str>) -> Result<Option<T>, String>
 where
     T: FromStr,
     T::Err: fmt::Display,
@@ -34,7 +34,7 @@ where
     opt_s
         .map(T::from_str)
         .transpose()
-        .map_err(|err| err.to_string())
+        .map_err(|err| format!("invalid {label}: {err}"))
 }
 
 //////////////////////
@@ -144,12 +144,12 @@ impl BestActionCommand {
         rolled_dice: &str,
     ) -> Result<Self, String> {
         let cmd = Self {
-            starting_dice: parse_opt(starting_dice)?
+            starting_dice: parse_opt("starting dice", starting_dice)?
                 .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-            total_score: parse_opt(total_score)?.unwrap_or(DEFAULT_TOTAL_SCORE),
-            max_score: parse_opt(max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
-            round_score: parse_req(round_score)?,
-            rolled_dice: parse_req(rolled_dice)?,
+            total_score: parse_opt("total score", total_score)?.unwrap_or(DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt("max score", max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
+            round_score: parse_req("round score", round_score)?,
+            rolled_dice: parse_req("rolled dice", rolled_dice)?,
         };
 
         if cmd.total_score >= cmd.max_score {
@@ -349,10 +349,11 @@ impl ScoreDistrCommand {
         all_dice: Option<&str>,
     ) -> Result<Self, String> {
         let cmd = Self {
-            round_total: parse_req(round_total)?,
-            target_score: parse_req(target_score)?,
-            dice_left: parse_req(dice_left)?,
-            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            round_total: parse_req("round total", round_total)?,
+            target_score: parse_req("target score", target_score)?,
+            dice_left: parse_req("dice left", dice_left)?,
+            all_dice: parse_opt("all dice", all_dice)?
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.dice_left)?;
@@ -481,8 +482,9 @@ pub struct MarkovMatrixCommand {
 impl MarkovMatrixCommand {
     fn try_from_str_args(target_score: &str, all_dice: Option<&str>) -> Result<Self, String> {
         let cmd = Self {
-            target_score: parse_req(target_score)?,
-            all_dice: parse_opt(all_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            target_score: parse_req("target score", target_score)?,
+            all_dice: parse_opt("all dice", all_dice)?
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.all_dice.validate_init_set(&cmd.all_dice)?;
@@ -551,10 +553,12 @@ impl TurnsCdfCommand {
         their_dice: Option<&str>,
     ) -> Result<Self, String> {
         let cmd = Self {
-            target_score: parse_req(target_score)?,
-            max_num_turns: parse_req(max_num_turns)?,
-            our_dice: parse_opt(our_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-            their_dice: parse_opt(their_dice)?.unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            target_score: parse_req("target score", target_score)?,
+            max_num_turns: parse_req("max num turns", max_num_turns)?,
+            our_dice: parse_opt("our dice", our_dice)?
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            their_dice: parse_opt("their dice", their_dice)?
+                .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
         };
 
         cmd.our_dice.validate_init_set(&cmd.our_dice)?;
