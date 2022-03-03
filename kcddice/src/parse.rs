@@ -121,7 +121,7 @@ impl FromStr for DiceSet {
 
                     let count = count_str
                         .parse::<u8>()
-                        .map_err(|err| format!("die count '{count_str}' is not a digit"))?;
+                        .map_err(|_| format!("die count '{count_str}' is not a digit"))?;
 
                     if !(1..=6).contains(&count) {
                         return Err(format!("die count ({count}) is not between 1 and 6"));

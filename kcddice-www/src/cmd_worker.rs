@@ -1,5 +1,5 @@
 use futures_channel::oneshot;
-use gloo_worker::{Bridged, Private, PrivateWorker, Worker, WorkerLink};
+use gloo_worker::{Bridged, Private, Worker, WorkerLink};
 use kcddice::{
     cli::{BestActionCommand, Command},
     parse,

@@ -1,9 +1,7 @@
 use crate::{
     dice::DieKindTable,
     parse,
-    search::{
-        p_rv1_lte_rv2, Action, ActionValue, Context, MarkovMatrix, NormalizedStateAction, State,
-    },
+    search::{p_rv1_lte_rv2, ActionValue, Context, MarkovMatrix, NormalizedStateAction, State},
     DEFAULT_MAX_SCORE, DEFAULT_TOTAL_SCORE,
 };
 use pico_args;
