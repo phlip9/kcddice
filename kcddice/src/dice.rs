@@ -48,9 +48,22 @@ impl DieDistr {
 pub enum DieKind {
     SENTINEL = 0,
     Standard,
+    Alfonse,
+    Ambrose,
+    Biased,
+    Even,
+    HenrysBeta,
     HeavenlyKingdomDie,
+    HolyTrinity,
+    LuCiFer,
+    Lucky,
+    LuckyPlaying,
     OddDie,
-    // ..
+    Misfortune,
+    Shrinking,
+    Strip,
+    TheCommonest,
+    Unpopular,
 }
 
 impl Default for DieKind {
@@ -61,6 +74,28 @@ impl Default for DieKind {
 }
 
 impl DieKind {
+    pub const fn all() -> [DieKind; 17] {
+        [
+            Self::Standard,
+            Self::Alfonse,
+            Self::Ambrose,
+            Self::Biased,
+            Self::Even,
+            Self::HenrysBeta,
+            Self::HeavenlyKingdomDie,
+            Self::HolyTrinity,
+            Self::LuCiFer,
+            Self::Lucky,
+            Self::LuckyPlaying,
+            Self::OddDie,
+            Self::Misfortune,
+            Self::Shrinking,
+            Self::Strip,
+            Self::TheCommonest,
+            Self::Unpopular,
+        ]
+    }
+
     fn is_sentinel(self) -> bool {
         self == Self::SENTINEL
     }
@@ -68,8 +103,22 @@ impl DieKind {
     pub fn from_memnonic(s: &str) -> Option<Self> {
         let kind = match s {
             "" | "s" => Self::Standard,
+            "a" => Self::Alfonse,
+            "am" => Self::Ambrose,
+            "b" => Self::Biased,
+            "e" => Self::Even,
+            "hb" => Self::HenrysBeta,
             "hk" => Self::HeavenlyKingdomDie,
+            "ht" => Self::HolyTrinity,
+            "l" => Self::LuCiFer,
+            "lk" => Self::Lucky,
+            "lp" => Self::LuckyPlaying,
+            "m" => Self::Misfortune,
             "o" => Self::OddDie,
+            "sh" => Self::Shrinking,
+            "sp" => Self::Strip,
+            "tc" => Self::TheCommonest,
+            "u" => Self::Unpopular,
             _ => return None,
         };
         Some(kind)
@@ -79,8 +128,45 @@ impl DieKind {
         match self {
             Self::SENTINEL => panic!("SENTINEL"),
             Self::Standard => "",
+            Self::Alfonse => "a",
+            Self::Ambrose => "am",
+            Self::Biased => "b",
+            Self::Even => "e",
+            Self::HenrysBeta => "hb",
             Self::HeavenlyKingdomDie => "hk",
+            Self::HolyTrinity => "ht",
+            Self::LuCiFer => "l",
+            Self::Lucky => "lk",
+            Self::LuckyPlaying => "lp",
+            Self::Misfortune => "m",
             Self::OddDie => "o",
+            Self::Shrinking => "sh",
+            Self::Strip => "sp",
+            Self::TheCommonest => "tc",
+            Self::Unpopular => "u",
+        }
+    }
+
+    pub fn as_human_readable(self) -> &'static str {
+        match self {
+            Self::SENTINEL => panic!("SENTINEL"),
+            Self::Standard => "Standard",
+            Self::Alfonse => "Alfonse's",
+            Self::Ambrose => "Ambrose's",
+            Self::Biased => "Biased",
+            Self::Even => "Even Number",
+            Self::HenrysBeta => "Henry's Beta",
+            Self::HeavenlyKingdomDie => "Heavenly Kingdom",
+            Self::HolyTrinity => "Holy Trinity",
+            Self::LuCiFer => "Lu/Ci/Fer",
+            Self::Lucky => "Lucky",
+            Self::LuckyPlaying => "Lucky Playing",
+            Self::Misfortune => "Die of Misfortune",
+            Self::OddDie => "Odd",
+            Self::Shrinking => "Shrinking",
+            Self::Strip => "Strip",
+            Self::Unpopular => "Unpopular",
+            Self::TheCommonest => "The Commonest",
         }
     }
 
@@ -91,8 +177,46 @@ impl DieKind {
 
         match self {
             Self::SENTINEL => panic!("SENTINEL"),
-            Self::Standard => DieDistr::new([1.0 / 6.0; 6]),
+            Self::Standard | Self::TheCommonest => DieDistr::new([1.0 / 6.0; 6]),
+            Self::Alfonse => DieDistr::new([0.385, 0.077, 0.077, 0.077, 0.154, 0.230]),
+            Self::Ambrose => DieDistr::new([0.286, 0.214, 0.0715, 0.0715, 0.143, 0.214]),
+            Self::Biased => DieDistr::new([
+                3.0 / 12.0,
+                4.0 / 12.0,
+                1.0 / 12.0,
+                1.0 / 12.0,
+                2.0 / 12.0,
+                1.0 / 12.0,
+            ]),
+            Self::LuCiFer => DieDistr::new([0.13, 0.13, 0.13, 0.13, 0.13, 0.35]),
+            Self::Even => DieDistr::new([
+                1.0 / 15.0,
+                4.0 / 15.0,
+                1.0 / 15.0,
+                4.0 / 15.0,
+                1.0 / 15.0,
+                4.0 / 15.0,
+            ]),
+            Self::HenrysBeta => DieDistr::new([
+                1.0 / 9.0,
+                4.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+            ]),
             Self::HeavenlyKingdomDie => DieDistr::new([0.368, 0.105, 0.105, 0.105, 0.105, 0.212]),
+            Self::HolyTrinity => DieDistr::new([0.182, 0.228, 0.455, 0.045, 0.045, 0.045]),
+            Self::Lucky => DieDistr::new([0.273, 0.045, 0.091, 0.136, 0.182, 0.273]),
+            Self::LuckyPlaying => DieDistr::new([
+                6.0 / 18.0,
+                0.0,
+                1.0 / 18.0,
+                1.0 / 18.0,
+                6.0 / 18.0,
+                4.0 / 18.0,
+            ]),
+            Self::Misfortune => DieDistr::new([4.6, 22.7, 22.7, 22.7, 22.7, 4.6]),
             Self::OddDie => DieDistr::new([
                 4.0 / 15.0,
                 1.0 / 15.0,
@@ -100,6 +224,30 @@ impl DieKind {
                 1.0 / 15.0,
                 4.0 / 15.0,
                 1.0 / 15.0,
+            ]),
+            Self::Shrinking => DieDistr::new([
+                2.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+                1.0 / 9.0,
+                3.0 / 9.0,
+            ]),
+            Self::Strip => DieDistr::new([
+                4.0 / 16.0,
+                2.0 / 16.0,
+                2.0 / 16.0,
+                2.0 / 16.0,
+                3.0 / 16.0,
+                3.0 / 16.0,
+            ]),
+            Self::Unpopular => DieDistr::new([
+                1.0 / 11.0,
+                3.0 / 11.0,
+                2.0 / 11.0,
+                2.0 / 11.0,
+                2.0 / 11.0,
+                1.0 / 11.0,
             ]),
         }
     }
