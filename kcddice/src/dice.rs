@@ -410,9 +410,16 @@ impl DieKindCounts {
         out
     }
 
+    #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn into_iter(self) -> impl Iterator<Item = (u8, u8)> {
         self.0.into_iter()
+    }
+}
+
+impl Default for DieKindCounts {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -651,6 +658,11 @@ impl DiceVec {
     #[inline]
     pub fn len(self) -> u8 {
         8 - (u64_leading_zero_bytes(self.0) as u8)
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
     }
 
     pub fn from_slice(dice: &mut [Die]) -> Self {

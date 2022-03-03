@@ -543,7 +543,7 @@ impl ActionValue {
                 "hold dice",
                 format!(
                     "{}",
-                    crate::parse::DiceVec::from_compact_form(&dice_table, held_dice)
+                    crate::parse::DiceVec::from_compact_form(dice_table, held_dice)
                 ),
             ),
         };
@@ -632,6 +632,12 @@ impl ScorePMF {
 
     pub fn total_mass(&self) -> f64 {
         self.0.values().sum()
+    }
+}
+
+impl Default for ScorePMF {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

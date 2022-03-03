@@ -304,8 +304,7 @@ fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> Vie
         Err(_err) => None,
     });
 
-    let state_clone = state.clone();
-    let maybe_err_str = ctx.create_memo(move || match state_clone.output_result.get().as_ref() {
+    let maybe_err_str = ctx.create_memo(move || match state.output_result.get().as_ref() {
         Ok(_action) => None,
         Err(err) => Some(err.clone()),
     });
@@ -380,9 +379,9 @@ fn DieKindsList<G: Html>(ctx: ScopeRef) -> View<G> {
     // ghetto matrix transpose lol
     // we want to convert column-major to row-major
     for r in 0..nrow1 {
-        for c in 0..cols.len() {
+        for (c, col) in cols.iter().enumerate() {
             let idx_row_maj = row_maj_rc2idx(ncol, r, c);
-            out[idx_row_maj] = cols[c].get(r).copied();
+            out[idx_row_maj] = col.get(r).copied();
         }
     }
 

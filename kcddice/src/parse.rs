@@ -84,6 +84,12 @@ impl DiceSet {
     }
 }
 
+impl Default for DiceSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FromIterator<(DieKind, u8)> for DiceSet {
     fn from_iter<T>(iter: T) -> Self
     where
@@ -261,6 +267,12 @@ impl DiceVec {
     pub fn to_string_clean(&self) -> String {
         use itertools::Itertools;
         self.0.iter().map(|die| format!("{}", die)).join(" ")
+    }
+}
+
+impl Default for DiceVec {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
