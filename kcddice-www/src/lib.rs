@@ -1,7 +1,7 @@
 use futures_util::future::{self, Either};
 use kcddice::{
     cli::{BestActionCommand, BestActionCommandOutput, Command, Metrics},
-    dice::DieKindTable,
+    dice::{DieKind, DieKindTable},
     parse,
     search::{Action, ActionValue},
 };
@@ -167,6 +167,8 @@ pub fn App<'a, G: Html>(ctx: ScopeRef<'a>, props: AppProps<'a>) -> View<G> {
                     // BestActionPage {}
                 }
             }
+
+            DieKindsList {}
         }
 
         // build classic form { (label, input) }
@@ -220,22 +222,6 @@ fn Title<G: Html>(ctx: ScopeRef) -> View<G> {
         }
     }
 }
-
-// fn to_js_elt<G: GenericNode, T: JsCast>(node_ref: &NodeRef<G>) -> T {
-//     node_ref
-//         .get::<DomNode>()
-//         .inner_element()
-//         .dyn_into::<T>()
-//         .unwrap()
-// }
-//
-// fn to_input_elt<G: GenericNode>(node_ref: &NodeRef<G>) -> HtmlInputElement {
-//     to_js_elt::<G, HtmlInputElement>(node_ref)
-// }
-//
-// fn to_button_elt<G: GenericNode>(node_ref: &NodeRef<G>) -> HtmlButtonElement {
-//     to_js_elt::<G, HtmlButtonElement>(node_ref)
-// }
 
 fn empty_str_to_opt(s: &str) -> Option<&str> {
     if s.is_empty() {
@@ -473,6 +459,104 @@ fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> Vie
                 } else {
                     View::empty()
                 })
+            }
+        }
+    }
+}
+
+#[component]
+fn DieKindsList<G: Html>(ctx: ScopeRef) -> View<G> {
+    let mut die_kinds = DieKind::all()
+        .into_iter()
+        .map(|die_kind| {
+            if die_kind == DieKind::Standard {
+                ("s", die_kind.as_human_readable())
+            } else {
+                (die_kind.as_memnonic(), die_kind.as_human_readable())
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // die_kinds.sort_unstable_by_key(|(memnonic, name)| -((memnonic.len() + name.len()) as isize));
+    die_kinds.sort_unstable_by_key(|(memnonic, _)| *memnonic);
+
+    let n1 = die_kinds.len();
+    let nrow1 = ((n1 as f32) / 3.0).ceil() as usize;
+    let n2 = n1 - nrow1;
+    let nrow2 = ((n2 as f32) / 2.0).ceil() as usize;
+
+    let cols = [
+        &die_kinds[0..nrow1],
+        &die_kinds[nrow1..(nrow1 + nrow2)],
+        &die_kinds[(nrow1 + nrow2)..],
+    ];
+
+    let ncol = cols.len();
+
+    // row-major
+    fn row_maj_rc2idx(ncol: usize, r: usize, c: usize) -> usize {
+        c + (ncol * r)
+    }
+
+    let mut out = vec![None; nrow1 * ncol];
+
+    // ghetto matrix transpose lol
+    // we want to convert column-major to row-major
+    for r in 0..nrow1 {
+        for c in 0..cols.len() {
+            let idx_row_maj = row_maj_rc2idx(ncol, r, c);
+            out[idx_row_maj] = cols[c].get(r).copied();
+        }
+    }
+
+    fn fst(opt: Option<(&'static str, &'static str)>) -> &'static str {
+        if let Some((s, _)) = opt {
+            s
+        } else {
+            ""
+        }
+    }
+
+    fn snd(opt: Option<(&'static str, &'static str)>) -> &'static str {
+        if let Some((_, s)) = opt {
+            s
+        } else {
+            ""
+        }
+    }
+
+    let rows = View::new_fragment(
+        out.chunks_exact(ncol)
+            .map(|ks| match ks {
+                &[k1, k2, k3] => {
+                    view! { ctx,
+                        tr {
+                            td { (fst(k1)) }
+                            td { (snd(k1)) }
+
+                            td { (fst(k2)) }
+                            td { (snd(k2)) }
+
+                            td { (fst(k3)) }
+                            td { (snd(k3)) }
+                        }
+                    }
+                }
+                _ => View::empty(),
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    view! { ctx,
+        section(id="die-kinds-wrapper") {
+            h3 {
+                "Supported Dice"
+            }
+
+            table(id="memnonics-table") {
+                tbody {
+                    (rows)
+                }
             }
         }
     }

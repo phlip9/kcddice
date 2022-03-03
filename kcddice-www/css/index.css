@@ -43,6 +43,23 @@ body::before {
   margin: 0 auto;
 }
 
+@media (min-width: 701px) and (max-width: 1600px) {
+  .page-wrapper {
+    margin-left: 5rem;
+  }
+}
+
+@media (max-width: 700px) {
+  .page-wrapper {
+    width: auto;
+    margin: 0 2rem;
+  }
+
+  header {
+    margin-top: 3rem !important;
+  }
+}
+
 header {
   margin-top: 180px;
   margin-bottom: 44px;
@@ -319,14 +336,56 @@ header > h2 > i:nth-child(2) > svg {
 }
 
 #output-err {
-  /* font-family: a, serif; */
-  /* font-weight: normal; */
   font-size: 1.75rem;
   line-height: 2.25rem;
-  /* letter-spacing: -0.05rem; */
-  /* [> width: 100%; <] */
-  /* [> text-align: right; <] */
-  /* margin-left: 2rem; */
-  /* padding-bottom: 0.2rem; */
-  /* color: hsla(12, 60%, 57%, 100%); */
+}
+
+#die-kinds-wrapper {
+  /* padding: 0 calc(var(--page-inner-pad) + var(--input-pad)); */
+  margin-bottom: 2rem;
+}
+
+@media (min-width: 1160px) {
+  /* float the die kinds help text to the right of the main page */
+  #die-kinds-wrapper {
+    position: absolute;
+    margin-top: -40rem;
+    padding-left: calc(var(--page-width) + 2rem);
+    z-index: -1;
+  }
+}
+
+#die-kinds-wrapper > h3 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-family: b, serif;
+  font-weight: normal;
+  font-size: 1.50rem;
+  line-height: 2.75rem;
+  letter-spacing: 0.04rem;
+  color: hsl(10, 19%, 65%);
+  /* color: hsl(60, 4%, 65%); */
+}
+
+#memnonics-table {
+  font-family: a, serif;
+  font-weight: normal;
+  font-size: 1.0rem;
+  line-height: 1.25rem;
+  /* letter-spacing: -0.03rem; */
+  color: hsl(10, 19%, 55%);
+  /* color: hsl(60, 4%, 55%); */
+}
+
+#memnonics-table td:nth-of-type(odd) {
+  text-align: right;
+  padding-right: 0.5rem;
+}
+
+#memnonics-table td:nth-of-type(even) {
+  padding-right: 1rem;
+}
+
+#memnonics-table td:last-of-type {
+  padding-right: 0;
 }
