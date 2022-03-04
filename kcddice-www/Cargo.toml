@@ -2,6 +2,7 @@
 name = "kcddice-www"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 # TODO: only enable sycamore ssr feature here?
 [[bin]]
