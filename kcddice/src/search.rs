@@ -244,7 +244,7 @@ impl NormalizedStateAction {
         }
     }
 
-    /// An pseudo initial state, before rolling the first set of dice.
+    /// A pseudo initial state, before rolling the first set of dice.
     #[allow(unused)]
     fn init_state(target_score: u16, dice_kinds: DieKindCounts) -> Self {
         Self {

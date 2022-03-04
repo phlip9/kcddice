@@ -173,6 +173,7 @@ USAGE:
 
 EXAMPLES:
     kcddice best-action 550 [1,1,2,3,5,6]
+    kcddice best-action -s [s:3,hk:2,o:1] -m 4000 -t 1500 550 [1,1hk,1o,5,5,5hk]
 
 OPTIONS:
     · --starting-dice / -s [s:n,hk:m,o:l,..] (default: [s:6])
@@ -333,28 +334,32 @@ impl fmt::Display for BestActionCommandOutput {
 
 #[derive(Debug)]
 pub struct ScoreDistrCommand {
-    round_total: u16,
-    target_score: u16,
+    starting_dice: parse::DiceSet,
+    total_score: u16,
+    max_score: u16,
+    round_score: u16,
     dice_left: parse::DiceSet,
-    all_dice: parse::DiceSet,
 }
 
 impl ScoreDistrCommand {
     fn try_from_str_args(
-        round_total: &str,
-        target_score: &str,
+        starting_dice: Option<&str>,
+        total_score: Option<&str>,
+        max_score: Option<&str>,
+        round_score: &str,
         dice_left: &str,
-        all_dice: Option<&str>,
     ) -> Result<Self, String> {
         let cmd = Self {
-            round_total: parse_req("round total", round_total)?,
-            target_score: parse_req("target score", target_score)?,
-            dice_left: parse_req("dice left", dice_left)?,
-            all_dice: parse_opt("all dice", all_dice)?
+            starting_dice: parse_opt("starting dice", starting_dice)?
                 .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            total_score: parse_opt("total score", total_score)?
+                .unwrap_or_else(|| DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt("max score", max_score)?.unwrap_or_else(|| DEFAULT_MAX_SCORE),
+            round_score: parse_req("round score", round_score)?,
+            dice_left: parse_req("dice left", dice_left)?,
         };
 
-        cmd.all_dice.validate_init_set(&cmd.dice_left)?;
+        cmd.starting_dice.validate_init_set(&cmd.dice_left)?;
 
         Ok(cmd)
     }
@@ -362,10 +367,29 @@ impl ScoreDistrCommand {
 
 impl Command for ScoreDistrCommand {
     const USAGE: &'static str = "\
-kcddice score-distr - TODO
+kcddice score-distr - compute the full round score probability mass function
 
 USAGE:
-    kcddice score-distr [option ...] <round-total> <target-score> <dice-left>
+    kcddice score-distr [option ...] <round-score> <dice-left>
+
+EXAMPLES:
+    # what is the score PMF after choosing two 1's with 4 standard dice left?
+    kcddice score-distr 200 [s:4]
+
+    # a more complex example
+    kcddice score-distr -s [s:3,hk:2,o:1] -t 1500 -m 5000 0 [s:1,hk:1,o:1]
+
+OPTIONS:
+    · --starting-dice / -s [s:n,hk:m,o:l,..] (default: [s:6])
+      The set of dice we started the game with.
+      For example, 3 Standard dice, 2 Heavenly Kingdom dice, and 1 Odd die would
+      be formatted as `-s [s:3,hk:2,o:1]`
+
+    · --total-score / -t score (default: 0)
+      Our current total score, accumulated from previous rounds.
+
+    · --max-score / -m score (default: 4000)
+      The score needed to win the game.
 ";
 
     type Output = ScoreDistrCommandOutput;
@@ -373,21 +397,29 @@ USAGE:
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
-        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
-        let round_total = args.free_value()?;
-        let target_score = args.free_value()?;
+        let starting_dice = args.opt_value(["-s", "--starting-dice"])?;
+        let total_score = args.opt_value(["-t", "--total-score"])?;
+        let max_score = args.opt_value(["-m", "--max-score"])?;
+        let round_score = args.free_value()?;
         let dice_left = args.free_value()?;
         args.expect_finished()?;
 
-        Self::try_from_str_args(&round_total, &target_score, &dice_left, all_dice.as_deref())
+        Self::try_from_str_args(
+            starting_dice.as_deref(),
+            total_score.as_deref(),
+            max_score.as_deref(),
+            &round_score,
+            &dice_left,
+        )
     }
 
     fn run(self) -> Result<Self::Output, String> {
-        let (dice_table, all_dice_counts) = self.all_dice.to_compact_form();
+        let (dice_table, starting_dice_counts) = self.starting_dice.to_compact_form();
         let dice_left = self.dice_left.to_counts(&dice_table);
-        let mut ctxt = Context::new(dice_table, all_dice_counts);
+        let mut ctxt = Context::new(dice_table, starting_dice_counts);
 
-        let qstate = NormalizedStateAction::new(self.round_total, self.target_score, dice_left);
+        let target_score = self.max_score - self.total_score;
+        let qstate = NormalizedStateAction::new(self.round_score, target_score, dice_left);
 
         let start_time = Instant::now();
         let score_pmf = qstate.score_distribution(&mut ctxt);
@@ -473,44 +505,77 @@ impl fmt::Display for ScoreDistrCommandOutput {
 
 #[derive(Debug)]
 pub struct MarkovMatrixCommand {
-    target_score: u16,
-    all_dice: parse::DiceSet,
+    starting_dice: parse::DiceSet,
+    total_score: u16,
+    max_score: u16,
 }
 
 impl MarkovMatrixCommand {
-    fn try_from_str_args(target_score: &str, all_dice: Option<&str>) -> Result<Self, String> {
+    fn try_from_str_args(
+        starting_dice: Option<&str>,
+        total_score: Option<&str>,
+        max_score: Option<&str>,
+    ) -> Result<Self, String> {
         let cmd = Self {
-            target_score: parse_req("target score", target_score)?,
-            all_dice: parse_opt("all dice", all_dice)?
+            starting_dice: parse_opt("starting dice", starting_dice)?
                 .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
+            total_score: parse_opt("total score", total_score)?.unwrap_or(DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt("max score", max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
         };
 
-        cmd.all_dice.validate_init_set(&cmd.all_dice)?;
+        cmd.starting_dice.validate_init_set(&cmd.starting_dice)?;
 
         Ok(cmd)
     }
 }
 
 impl Command for MarkovMatrixCommand {
-    // TODO(philiphayes): fill out
-    const USAGE: &'static str = "";
+    const USAGE: &'static str = "\
+kcddice markov-matrix - for each possible intermediate round score, compute the
+    score PMF (assuming we're following the optimal policy). these distributions
+    are then horizontally stacked into a resulting matrix.
+
+USAGE:
+    kcddice markov-matrix [option ...]
+
+EXAMPLES:
+    kcddice markov-matrix -s [s:3,hk:2,o:1] -m 4000 -t 1500
+
+OPTIONS:
+    · --starting-dice / -s [s:n,hk:m,o:l,..] (default: [s:6])
+      The set of dice we started the game with.
+      For example, 3 Standard dice, 2 Heavenly Kingdom dice, and 1 Odd die would
+      be formatted as `-s [s:3,hk:2,o:1]`
+
+    · --total-score / -t score (default: 0)
+      Our current total score, accumulated from previous rounds.
+
+    · --max-score / -m score (default: 4000)
+      The score needed to win the game.
+";
 
     type Output = MarkovMatrixCommandOutput;
 
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
-        let all_dice = args.opt_value(["-k", "--die-kinds"])?;
-        let target_score = args.free_value()?;
+        let starting_dice = args.opt_value(["-s", "--starting-dice"])?;
+        let total_score = args.opt_value(["-t", "--total-score"])?;
+        let max_score = args.opt_value(["-m", "--max-score"])?;
         args.expect_finished()?;
 
-        Self::try_from_str_args(&target_score, all_dice.as_deref())
+        Self::try_from_str_args(
+            starting_dice.as_deref(),
+            total_score.as_deref(),
+            max_score.as_deref(),
+        )
     }
 
     fn run(self) -> Result<Self::Output, String> {
         let start_time = Instant::now();
-        let (die_table, die_counts) = self.all_dice.to_compact_form();
-        let matrix = MarkovMatrix::from_optimal_policy(die_table, die_counts, self.target_score);
+        let (die_table, die_counts) = self.starting_dice.to_compact_form();
+        let target_score = self.max_score - self.total_score;
+        let matrix = MarkovMatrix::from_optimal_policy(die_table, die_counts, target_score);
         let search_duration = start_time.elapsed();
 
         let mut metrics = Metrics::new();
@@ -537,22 +602,30 @@ impl fmt::Display for MarkovMatrixCommandOutput {
 
 #[derive(Debug)]
 pub struct TurnsCdfCommand {
-    target_score: u16,
-    max_num_turns: usize,
+    our_total_score: u16,
+    their_total_score: u16,
+    max_score: u16,
+    max_turns: usize,
     our_dice: parse::DiceSet,
     their_dice: parse::DiceSet,
 }
 
 impl TurnsCdfCommand {
     fn try_from_str_args(
-        target_score: &str,
-        max_num_turns: &str,
+        our_total_score: Option<&str>,
+        their_total_score: Option<&str>,
+        max_score: Option<&str>,
+        max_turns: Option<&str>,
         our_dice: Option<&str>,
         their_dice: Option<&str>,
     ) -> Result<Self, String> {
         let cmd = Self {
-            target_score: parse_req("target score", target_score)?,
-            max_num_turns: parse_req("max num turns", max_num_turns)?,
+            our_total_score: parse_opt("our total score", our_total_score)?
+                .unwrap_or(DEFAULT_TOTAL_SCORE),
+            their_total_score: parse_opt("their total score", their_total_score)?
+                .unwrap_or(DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt("max score", max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
+            max_turns: parse_opt("max turns", max_turns)?.unwrap_or(50),
             our_dice: parse_opt("our dice", our_dice)?
                 .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
             their_dice: parse_opt("their dice", their_dice)?
@@ -567,23 +640,55 @@ impl TurnsCdfCommand {
 }
 
 impl Command for TurnsCdfCommand {
-    // TODO(philiphayes): fill out
-    const USAGE: &'static str = "";
+    const USAGE: &'static str = "\
+kcddice turns-cdf - compute our turns-to-win distribution. return as a
+    cumulative density function. also compute the total win probability.
+
+USAGE:
+    kcddice turns-cdf [option ...]
+
+EXAMPLES:
+    kcddice turns-cdf
+    kcddice turns-cdf -o [s:3,hk:2,o:1] -t [s:4,o:2]
+
+OPTIONS:
+    · --our-total-score (default: 0)
+      Our current total score, accumulated from previous rounds.
+
+    · --their-total-score (default: 0)
+      The opponent's current total score.
+
+    · --max-score / -m score (default: 4000)
+      The score needed to win the game.
+
+    · --max-turns / -u turns (default: 50)
+      Truncate the CDF at this many turns.
+
+    · --our-dice / -o [s:n,hk:m,o:l,..] (default: [s:6])
+      The set of dice we started the game with.
+
+    · --their-dice / -t [s:n,hk:m,o:l,..] (default: [s:6])
+      The set of dice the opponent started the game with.
+";
 
     type Output = TurnsCdfCommandOutput;
 
     fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
         args.maybe_help(Self::USAGE);
 
-        let our_dice = args.opt_value(["-o", "--our-die-kinds"])?;
-        let their_dice = args.opt_value(["-t", "--their-die-kinds"])?;
-        let target_score = args.free_value()?;
-        let max_num_turns = args.free_value()?;
+        let our_total_score = args.opt_value("--our-total-score")?;
+        let their_total_score = args.opt_value("--their-total-score")?;
+        let max_score = args.opt_value(["-m", "--max-score"])?;
+        let max_turns = args.opt_value(["-u", "--max-turns"])?;
+        let our_dice = args.opt_value(["-o", "--our-dice"])?;
+        let their_dice = args.opt_value(["-t", "--their-dice"])?;
         args.expect_finished()?;
 
         Self::try_from_str_args(
-            &target_score,
-            &max_num_turns,
+            our_total_score.as_deref(),
+            their_total_score.as_deref(),
+            max_score.as_deref(),
+            max_turns.as_deref(),
             our_dice.as_deref(),
             their_dice.as_deref(),
         )
@@ -592,22 +697,25 @@ impl Command for TurnsCdfCommand {
     fn run(self) -> Result<Self::Output, String> {
         let start_time = Instant::now();
 
+        let our_target_score = self.max_score - self.our_total_score;
         let (our_die_table, our_die_counts) = self.our_dice.to_compact_form();
         let our_matrix =
-            MarkovMatrix::from_optimal_policy(our_die_table, our_die_counts, self.target_score);
-        let our_turns_cdf = our_matrix.turns_to_win_cdf(self.max_num_turns);
+            MarkovMatrix::from_optimal_policy(our_die_table, our_die_counts, our_target_score);
+        let our_turns_cdf = our_matrix.turns_to_win_cdf(self.max_turns);
 
-        let their_turns_cdf = if self.our_dice == self.their_dice {
-            our_turns_cdf.clone()
-        } else {
-            let (their_die_table, their_die_counts) = self.their_dice.to_compact_form();
-            let their_matrix = MarkovMatrix::from_optimal_policy(
-                their_die_table,
-                their_die_counts,
-                self.target_score,
-            );
-            their_matrix.turns_to_win_cdf(self.max_num_turns)
-        };
+        let their_turns_cdf =
+            if self.our_dice == self.their_dice && self.our_total_score == self.their_total_score {
+                our_turns_cdf.clone()
+            } else {
+                let their_target_score = self.max_score - self.their_total_score;
+                let (their_die_table, their_die_counts) = self.their_dice.to_compact_form();
+                let their_matrix = MarkovMatrix::from_optimal_policy(
+                    their_die_table,
+                    their_die_counts,
+                    their_target_score,
+                );
+                their_matrix.turns_to_win_cdf(self.max_turns)
+            };
 
         let search_duration = start_time.elapsed();
 
@@ -634,7 +742,7 @@ impl Command for TurnsCdfCommand {
         metrics.push("Pr[win]", format!("{}", p_win));
 
         Ok(TurnsCdfCommandOutput {
-            max_num_turns: self.max_num_turns,
+            max_turns: self.max_turns,
             our_turns_cdf: our_turns_cdf.to_vec(),
             their_turns_cdf: their_turns_cdf.to_vec(),
             metrics,
@@ -643,7 +751,7 @@ impl Command for TurnsCdfCommand {
 }
 
 pub struct TurnsCdfCommandOutput {
-    max_num_turns: usize,
+    max_turns: usize,
     our_turns_cdf: Vec<f64>,
     their_turns_cdf: Vec<f64>,
     metrics: Metrics,
@@ -659,7 +767,7 @@ impl fmt::Display for TurnsCdfCommandOutput {
             "their turns CDF"
         ));
 
-        for turn in 1..=self.max_num_turns {
+        for turn in 1..=self.max_turns {
             table.add_row(row!(
                 turn,
                 self.our_turns_cdf[turn - 1],
@@ -692,9 +800,9 @@ USAGE:
 
 SUBCOMMANDS:
     · kcddice best-action - compute the best action to take in a round
-    · kcddice score-distr - compute full score PMF given the score and number of dice left to roll
-    · kcddice markov-matrix - TODO
-    · kcddice turns-cdf - TODO
+    · kcddice score-distr - compute full score PMF given the score and dice left to roll
+    · kcddice markov-matrix - compute score PMF for each round score
+    · kcddice turns-cdf - compute the turns-to-win distribution and win probability
 ";
 
     type Output = String;
