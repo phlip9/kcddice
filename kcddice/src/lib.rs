@@ -369,7 +369,7 @@ pub(crate) fn transpose<T: Copy>(xs: &[T], ncol: usize) -> Vec<Option<T>> {
     let nrow = usize_div_ceil(xs.len(), ncol);
 
     let mut out = vec![None; nrow * ncol];
-    for (idx, x) in xs.into_iter().enumerate() {
+    for (idx, x) in xs.iter().enumerate() {
         // idx = r + (nrow * c)
         // idx / nrow = r / nrow + c = 0 + c = c
         // idx % nrow = (r % nrow) + 0 = r

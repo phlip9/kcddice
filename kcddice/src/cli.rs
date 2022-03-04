@@ -149,11 +149,8 @@ USAGE:
 
         let ncol = 3;
         for cols in crate::dice_table(ncol).chunks_exact(ncol) {
-            match cols {
-                &[(m1, n1), (m2, n2), (m3, n3)] => {
-                    table.add_row(row!(m1, n1, m2, n2, m3, n3));
-                }
-                _ => {}
+            if let &[(m1, n1), (m2, n2), (m3, n3)] = cols {
+                table.add_row(row!(m1, n1, m2, n2, m3, n3));
             }
         }
 
@@ -393,9 +390,8 @@ impl ScoreDistrCommand {
         let cmd = Self {
             starting_dice: parse_opt("starting dice", starting_dice)?
                 .unwrap_or_else(|| parse::DiceSet::all_standard(6)),
-            total_score: parse_opt("total score", total_score)?
-                .unwrap_or_else(|| DEFAULT_TOTAL_SCORE),
-            max_score: parse_opt("max score", max_score)?.unwrap_or_else(|| DEFAULT_MAX_SCORE),
+            total_score: parse_opt("total score", total_score)?.unwrap_or(DEFAULT_TOTAL_SCORE),
+            max_score: parse_opt("max score", max_score)?.unwrap_or(DEFAULT_MAX_SCORE),
             round_score: parse_req("round score", round_score)?,
             dice_left: parse_req("dice left", dice_left)?,
         };

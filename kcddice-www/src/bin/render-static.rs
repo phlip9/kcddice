@@ -30,7 +30,6 @@ fn main() {
         // marker was.
         (Some(pre), Some(post), None) => {
             // TODO: wait for hydration to work...
-            let prerender = "";
             // let prerender = sycamore::render_to_string(|ctx| {
             //     view! { ctx,
             //         App(AppProps::init_placeholders(ctx))
@@ -39,7 +38,8 @@ fn main() {
             // });
 
             // stitch everything back together
-            ([pre, &prerender, post].join(""), true)
+            // ([pre, &prerender, post].join(""), true)
+            ([pre, "", post].join(""), true)
         }
         (Some(_), Some(_), Some(_)) => panic!("too many hydration markers"),
     };
