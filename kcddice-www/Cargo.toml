@@ -11,7 +11,7 @@ name = "render-static"
 name = "render-browser"
 
 [[bin]]
-name = "cmd_worker"
+name = "cmd-worker"
 
 [dependencies]
 console_error_panic_hook = "0.1.7"

@@ -106,6 +106,6 @@ impl Worker for CmdWorker {
     }
 
     fn name_of_resource() -> &'static str {
-        "cmd_worker.js"
+        "cmd-worker.js"
     }
 }

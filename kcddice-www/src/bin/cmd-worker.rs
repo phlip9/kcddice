@@ -9,9 +9,9 @@ fn main() {
     // at least).
     console_log::init_with_level(log::Level::Info).expect("Failed to init logger");
 
-    trace!("cmd_worker: init");
+    trace!("cmd-worker: init");
 
     CmdWorker::register();
 
-    trace!("cmd_worker: registered");
+    trace!("cmd-worker: registered");
 }
