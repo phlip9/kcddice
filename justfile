@@ -3,9 +3,11 @@
 set shell := ["bash", "-uc"]
 set positional-arguments
 
-alias t := test
+alias bw := build-www
 alias c := clippy
-alias w := watch-www
+alias dw := deploy-www
+alias t := test
+alias ww := watch-www
 
 default:
   @just --list
@@ -28,8 +30,11 @@ test:
 clippy:
   cargo clippy --all-targets
 
-build-www:
-  trunk build --release -- kcddice-www/index.html
+build-www +PUBLIC_URL='/':
+  trunk build \
+    --release \
+    --public-url "{{PUBLIC_URL}}" \
+    -- kcddice-www/index.html
 
 serve-www: build-www
   python3 -m http.server \
@@ -40,6 +45,32 @@ watch-www:
   cargo watch \
     --ignore kcddice-www/dist \
     -s "just serve-www"
+
+deploy-www: (build-www '/kcddice/')
+  #!/usr/bin/env bash
+  set -euxo pipefail
+
+  DIST_DIR="$(pwd)/kcddice-www/dist"
+
+  HEAD=$(git rev-parse --verify HEAD)
+  ORIGIN=$(git config --get remote.origin.url)
+  TMP_DIR=$(mktemp -d -t kcddice-XXXXXXXX)
+
+  cd $TMP_DIR
+
+  git init .
+  git remote add origin $ORIGIN
+  git checkout -b gh-pages
+
+  cp -r $DIST_DIR/* ./
+  touch .nojekyll
+  git add .
+  git commit -m "deploy kcddice-www: $HEAD"
+
+  git push -f origin gh-pages
+
+  cd ..
+  rm -rf $TMP_DIR
 
 # run cli tool
 run *args='':
