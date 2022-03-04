@@ -4,7 +4,7 @@ use kcddice::{
     cli::{BestActionCommand, Command},
     parse,
 };
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use std::{cell::RefCell, rc::Rc};
 
 pub struct CmdWorker {
@@ -15,7 +15,7 @@ impl CmdWorker {
     fn handle_cmd(cmd: BestActionCommand) -> Result<parse::Action, String> {
         let out = cmd.run()?;
 
-        debug!("CmdWorker::handle_cmd: out: {out}");
+        info!("CmdWorker::handle_cmd: out:\n{out}");
 
         let best_action = out
             .action_values

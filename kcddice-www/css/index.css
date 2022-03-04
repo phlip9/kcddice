@@ -182,6 +182,8 @@ header > h2 > i:nth-child(2) > svg {
   line-height: 1.375rem;
   letter-spacing: 0.03rem;
   color: hsla(276, 5%, 25%, 80%);
+
+  cursor: pointer;
 }
 
 .input-wrapper > input {
@@ -244,6 +246,8 @@ header > h2 > i:nth-child(2) > svg {
   line-height: 2.75rem;
   letter-spacing: -0.03rem;
   color: hsl(14, 12%, 74%);
+
+  cursor: pointer;
 
   /* background-color: hsl(195, 19%, 21%); */
   background-image: url('/imgs/decoration_bottom_cc.png');
@@ -340,22 +344,22 @@ header > h2 > i:nth-child(2) > svg {
   line-height: 2.25rem;
 }
 
-#die-kinds-wrapper {
+#info-wrapper {
   /* padding: 0 calc(var(--page-inner-pad) + var(--input-pad)); */
   margin-bottom: 2rem;
 }
 
 @media (min-width: 1160px) {
   /* float the die kinds help text to the right of the main page */
-  #die-kinds-wrapper {
+  #info-wrapper {
     position: absolute;
     margin-top: -40rem;
-    padding-left: calc(var(--page-width) + 2rem);
-    z-index: -1;
+    margin-left: calc(var(--page-width) + 2rem);
+    /* z-index: -1; */
   }
 }
 
-#die-kinds-wrapper > h3 {
+#info-wrapper > h3 {
   margin-top: 0;
   margin-bottom: 0.5rem;
   font-family: b, serif;
@@ -377,6 +381,10 @@ header > h2 > i:nth-child(2) > svg {
   /* color: hsl(60, 4%, 55%); */
 }
 
+#memnonics-table td {
+  padding-left: 0;
+}
+
 #memnonics-table td:nth-of-type(odd) {
   text-align: right;
   padding-right: 0.5rem;
@@ -388,4 +396,31 @@ header > h2 > i:nth-child(2) > svg {
 
 #memnonics-table td:last-of-type {
   padding-right: 0;
+}
+
+#links {
+  margin-top: 2rem;
+  padding-left: 0.2rem;
+
+  list-style: none;
+
+  font-family: a, serif;
+  font-weight: normal;
+  font-size: 1.0rem;
+  line-height: 1.25rem;
+}
+
+#links a {
+  /* color: hsl(210, 90%, 60%); */
+  color: hsl(10, 19%, 55%);
+
+  transition: color 0.2s ease-in-out;
+}
+
+#links a:hover, #links a:focus {
+  color: hsl(10, 19%, 65%);
+}
+
+#links a:visited {
+  color: hsl(222, 19%, 55%);
 }

@@ -1,6 +1,6 @@
 use futures_util::future::{self, Either};
 use kcddice::{cli::BestActionCommand, dice::DieKind, parse};
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use std::{str::FromStr, time::Duration};
 use sycamore::prelude::*;
 use web_sys::Event;
@@ -61,7 +61,7 @@ pub fn App<'a, G: Html>(ctx: ScopeRef<'a>, props: AppProps<'a>) -> View<G> {
                 }
             }
 
-            DieKindsList {}
+            Info {}
         }
     }
 }
@@ -177,7 +177,7 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
             let f_sleep = gloo_timers::future::sleep(Duration::from_secs_f32(0.35));
             let f_request = match maybe_cmd {
                 Ok(cmd) => {
-                    trace!("BestActionPage::handle_submit::async: sending request to worker");
+                    info!("BestActionPage::handle_submit::async: sending request to worker:\n{cmd:#?}");
                     Either::Left(crate::cmd_worker::CmdWorker::request(cmd))
                 }
                 Err(err) => Either::Right(future::ready(Err(err))),
@@ -340,7 +340,7 @@ fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> Vie
 }
 
 #[component]
-fn DieKindsList<G: Html>(ctx: ScopeRef) -> View<G> {
+fn DiceMemnonicsTable<G: Html>(ctx: ScopeRef) -> View<G> {
     let mut die_kinds = DieKind::all()
         .into_iter()
         .map(|die_kind| {
@@ -424,15 +424,28 @@ fn DieKindsList<G: Html>(ctx: ScopeRef) -> View<G> {
     );
 
     view! { ctx,
-        section(id="die-kinds-wrapper") {
+        table(id="memnonics-table") {
+            tbody {
+                (rows)
+            }
+        }
+    }
+}
+
+#[component]
+fn Info<G: Html>(ctx: ScopeRef) -> View<G> {
+    view! { ctx,
+        section(id="info-wrapper") {
             h3 {
                 "Supported Dice"
             }
 
-            table(id="memnonics-table") {
-                tbody {
-                    (rows)
-                }
+            DiceMemnonicsTable {}
+
+            ul(id="links") {
+                li { a(href="https://github.com/phlip9/kcddice#About") { "about" } }
+                li { a(href="https://github.com/phlip9/kcddice") { "github" } }
+                li { a(href="https://reddit.com/u/phlip9") { "reddit post" } }
             }
         }
     }
