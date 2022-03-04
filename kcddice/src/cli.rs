@@ -120,6 +120,47 @@ pub trait Command: Sized {
     fn run(self) -> Result<Self::Output, String>;
 }
 
+/////////////////////
+// ListDiceCommand //
+/////////////////////
+
+#[derive(Clone, Debug)]
+pub struct ListDiceCommand;
+
+impl Command for ListDiceCommand {
+    const USAGE: &'static str = "\
+kcddice list-dice - list all the supported dice and their short names
+
+USAGE:
+    kcddice list-dice
+";
+
+    type Output = Table;
+
+    fn try_from_cli_args(mut args: Args) -> Result<Self, String> {
+        args.maybe_help(Self::USAGE);
+
+        args.expect_finished()?;
+        Ok(Self)
+    }
+
+    fn run(self) -> Result<Self::Output, String> {
+        let mut table = Table::new("  {:>} {:<}  {:>} {:<}  {:>} {:<}").with_heading("");
+
+        let ncol = 3;
+        for cols in crate::dice_table(ncol).chunks_exact(ncol) {
+            match cols {
+                &[(m1, n1), (m2, n2), (m3, n3)] => {
+                    table.add_row(row!(m1, n1, m2, n2, m3, n3));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(table)
+    }
+}
+
 ///////////////////////
 // BestActionCommand //
 ///////////////////////
@@ -785,6 +826,7 @@ impl fmt::Display for TurnsCdfCommandOutput {
 
 #[derive(Debug)]
 pub enum BaseCommand {
+    ListDice(ListDiceCommand),
     BestAction(BestActionCommand),
     ScoreDistr(ScoreDistrCommand),
     MarkovMatrix(MarkovMatrixCommand),
@@ -799,6 +841,7 @@ USAGE:
     kcddice [option ...] <subcommand>
 
 SUBCOMMANDS:
+    · kcddice list-dice - list all the supported dice and their short names
     · kcddice best-action - compute the best action to take in a round
     · kcddice score-distr - compute full score PMF given the score and dice left to roll
     · kcddice markov-matrix - compute score PMF for each round score
@@ -811,6 +854,7 @@ SUBCOMMANDS:
         let maybe_subcommand = args.subcommand()?;
 
         match maybe_subcommand.as_deref() {
+            Some("list-dice") => Ok(Self::ListDice(ListDiceCommand::try_from_cli_args(args)?)),
             Some("best-action") => Ok(Self::BestAction(BestActionCommand::try_from_cli_args(
                 args,
             )?)),
@@ -831,6 +875,7 @@ SUBCOMMANDS:
 
     fn run(self) -> Result<String, String> {
         match self {
+            Self::ListDice(cmd) => cmd.run().map(|out| out.to_string()),
             Self::BestAction(cmd) => cmd.run().map(|out| out.to_string()),
             Self::ScoreDistr(cmd) => cmd.run().map(|out| out.to_string()),
             Self::MarkovMatrix(cmd) => cmd.run().map(|out| out.to_string()),

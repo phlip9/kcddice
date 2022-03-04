@@ -1,5 +1,5 @@
 use futures_util::future::{self, Either};
-use kcddice::{cli::BestActionCommand, dice::DieKind, parse};
+use kcddice::{cli::BestActionCommand, parse};
 use log::{debug, info, trace, warn};
 use std::{str::FromStr, time::Duration};
 use sycamore::prelude::*;
@@ -341,80 +341,24 @@ fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> Vie
 
 #[component]
 fn DiceMemnonicsTable<G: Html>(ctx: ScopeRef) -> View<G> {
-    let mut die_kinds = DieKind::all()
-        .into_iter()
-        .map(|die_kind| {
-            if die_kind == DieKind::Standard {
-                ("s", die_kind.as_human_readable())
-            } else {
-                (die_kind.as_memnonic(), die_kind.as_human_readable())
-            }
-        })
-        .collect::<Vec<_>>();
-
-    // more compact table, but not alphabetical order... idk if I will use this
-    // die_kinds.sort_unstable_by_key(|(memnonic, name)| -((memnonic.len() + name.len()) as isize));
-    die_kinds.sort_unstable_by_key(|(memnonic, _)| *memnonic);
-
-    let n1 = die_kinds.len();
-    let nrow1 = ((n1 as f32) / 3.0).ceil() as usize;
-    let n2 = n1 - nrow1;
-    let nrow2 = ((n2 as f32) / 2.0).ceil() as usize;
-
-    let cols = [
-        &die_kinds[0..nrow1],
-        &die_kinds[nrow1..(nrow1 + nrow2)],
-        &die_kinds[(nrow1 + nrow2)..],
-    ];
-
-    let ncol = cols.len();
-
-    // row-major
-    fn row_maj_rc2idx(ncol: usize, r: usize, c: usize) -> usize {
-        c + (ncol * r)
-    }
-
-    let mut out = vec![None; nrow1 * ncol];
-
-    // ghetto matrix transpose lol
-    // we want to convert column-major to row-major
-    for r in 0..nrow1 {
-        for (c, col) in cols.iter().enumerate() {
-            let idx_row_maj = row_maj_rc2idx(ncol, r, c);
-            out[idx_row_maj] = col.get(r).copied();
-        }
-    }
-
-    fn fst(opt: Option<(&'static str, &'static str)>) -> &'static str {
-        if let Some((s, _)) = opt {
-            s
-        } else {
-            ""
-        }
-    }
-
-    fn snd(opt: Option<(&'static str, &'static str)>) -> &'static str {
-        if let Some((_, s)) = opt {
-            s
-        } else {
-            ""
-        }
-    }
+    let ncol = 3;
+    let dice_table = kcddice::dice_table(ncol);
 
     let rows = View::new_fragment(
-        out.chunks_exact(ncol)
+        dice_table
+            .chunks_exact(ncol)
             .map(|ks| match ks {
                 &[k1, k2, k3] => {
                     view! { ctx,
                         tr {
-                            td { (fst(k1)) }
-                            td { (snd(k1)) }
+                            td { (k1.0) }
+                            td { (k1.1) }
 
-                            td { (fst(k2)) }
-                            td { (snd(k2)) }
+                            td { (k2.0) }
+                            td { (k2.1) }
 
-                            td { (fst(k3)) }
-                            td { (snd(k3)) }
+                            td { (k3.0) }
+                            td { (k3.1) }
                         }
                     }
                 }

@@ -145,6 +145,17 @@ pub(crate) fn is_partitioned<T>(
     iter.all(&mut pred) || !iter.any(pred)
 }
 
+// `x / y`, rounded up
+pub(crate) const fn usize_div_ceil(x: usize, y: usize) -> usize {
+    let d = x / y;
+    let r = x % y;
+    if r > 0 && y > 0 {
+        d + 1
+    } else {
+        d
+    }
+}
+
 ///////////////
 // Bit Hacks //
 ///////////////
@@ -349,6 +360,49 @@ where
     }
 }
 
+//////////
+// util //
+//////////
+
+// slightly modified matrix transpose, xs.len() can be < nrow * ncol
+pub(crate) fn transpose<T: Copy>(xs: &[T], ncol: usize) -> Vec<Option<T>> {
+    let nrow = usize_div_ceil(xs.len(), ncol);
+
+    let mut out = vec![None; nrow * ncol];
+    for (idx, x) in xs.into_iter().enumerate() {
+        // idx = r + (nrow * c)
+        // idx / nrow = r / nrow + c = 0 + c = c
+        // idx % nrow = (r % nrow) + 0 = r
+        let (c, r) = (idx / nrow, idx % nrow);
+        let idx2 = c + (ncol * r);
+        out[idx2] = Some(*x);
+    }
+    out
+}
+
+pub fn dice_table(ncol: usize) -> Vec<(&'static str, &'static str)> {
+    let mut dice = dice::DieKind::all().to_vec();
+    // more compact table, but not alphabetical order... idk if I will use this
+    // dice.sort_unstable_by_key(|(memnonic, name)| -((memnonic.len() + name.len()) as isize));
+    dice.sort_unstable_by_key(|die_kind| die_kind.as_memnonic());
+
+    transpose(&dice, ncol)
+        .into_iter()
+        .map(|maybe_die_kind| {
+            match maybe_die_kind {
+                Some(die_kind) => {
+                    if die_kind == dice::DieKind::Standard {
+                        ("s", die_kind.as_human_readable())
+                    } else {
+                        (die_kind.as_memnonic(), die_kind.as_human_readable())
+                    }
+                }
+                None => ("", ""),
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
 ///////////
 // Tests //
 ///////////
@@ -516,5 +570,19 @@ mod test {
                 u64_trailing_byte_idx_lt(n, y)
             );
         });
+    }
+
+    #[test]
+    fn test_transpose() {
+        let xs = vec![1, 2, 3, 4, 5];
+        let expected_c1 = vec![Some(1), Some(2), Some(3), Some(4), Some(5)];
+        let expected_c2 = vec![Some(1), Some(4), Some(2), Some(5), Some(3), None];
+        let expected_c3 = vec![Some(1), Some(3), Some(5), Some(2), Some(4), None];
+        let expected_c4 = vec![Some(1), Some(3), Some(5), None, Some(2), Some(4), None, None];
+
+        assert_eq!(expected_c1, transpose(&xs, 1));
+        assert_eq!(expected_c2, transpose(&xs, 2));
+        assert_eq!(expected_c3, transpose(&xs, 3));
+        assert_eq!(expected_c4, transpose(&xs, 4));
     }
 }
