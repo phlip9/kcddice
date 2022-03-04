@@ -1,6 +1,6 @@
-use kcddice_www::{App, AppProps};
+// use kcddice_www::{App, AppProps};
 use std::io::{self, Read, Write};
-use sycamore::prelude::*;
+// use sycamore::prelude::*;
 use trice::Instant;
 
 // 1. Reads html file from stdin.
@@ -29,12 +29,14 @@ fn main() {
         // found a marker. we'll pre-render the page and insert it where the
         // marker was.
         (Some(pre), Some(post), None) => {
-            let prerender = sycamore::render_to_string(|ctx| {
-                view! { ctx,
-                    App(AppProps::init_placeholders(ctx))
-                    // App {}
-                }
-            });
+            // TODO: wait for hydration to work...
+            let prerender = "";
+            // let prerender = sycamore::render_to_string(|ctx| {
+            //     view! { ctx,
+            //         App(AppProps::init_placeholders(ctx))
+            //         // App {}
+            //     }
+            // });
 
             // stitch everything back together
             ([pre, &prerender, post].join(""), true)
@@ -47,7 +49,7 @@ fn main() {
         .expect("Failed to write to stdout");
 
     eprintln!(
-        "kcddice-www::render: end, did something: {:?}, time: {:?}",
+        "kcddice-www::render-static: end, did something: {:?}, time: {:?}",
         did_something,
         start.elapsed(),
     );

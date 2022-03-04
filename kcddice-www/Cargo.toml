@@ -22,7 +22,7 @@ gloo-timers = { version = "0.2.3", features = ["futures"] }
 gloo-worker = "0.1.0"
 kcddice = { path = "../kcddice" }
 log = "0.4.14"
-sycamore = { version = "0.8.0-beta.2", features = ["ssr", "experimental-hydrate", "suspense"] }
+sycamore = { git = "https://github.com/sycamore-rs/sycamore.git", rev = "24a1c15830", features = ["suspense"] }
 trice = "0.1.0"
 wasm-bindgen = "0.2.79"
 
