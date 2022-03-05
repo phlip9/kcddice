@@ -2,11 +2,13 @@
   --color-off-white: hsl(60, 4%, 85%);
   --color-tan: hsl(8, 59%, 70%);
   --page-width: 540px;
+  --page-outer-margin-left: auto;
+  --page-outer-margin-right: auto;
   --page-inner-pad: 4rem;
   --input-pad: 1rem;
   --page-border-radius: 4px;
   --output-decor-size: 1.25rem;
-  --output-decor-pad: 2.5rem;
+  --output-decor-pad: 1.25rem;
 }
 
 @font-face {
@@ -20,6 +22,9 @@
 }
 
 body {
+  overflow-x: hidden;
+  overflow-y: scroll;
+
   background-color: hsl(10, 19%, 15%);
   background-image: url('imgs/1024px-Husite_-_Jensky_kodex_bg1.jpg');
   background-size: cover;
@@ -40,19 +45,39 @@ body::before {
 
 .page-wrapper {
   width: var(--page-width);
-  margin: 0 auto;
+  margin: 0 var(--page-outer-margin-right) 0 var(--page-outer-margin-left);
 }
 
 @media (min-width: 701px) and (max-width: 1600px) {
-  .page-wrapper {
-    margin-left: 5rem;
+  :root {
+    --page-outer-margin-left: 5rem;
+    --page-outer-margin-right: auto;
   }
 }
 
-@media (max-width: 700px) {
-  .page-wrapper {
-    width: auto;
-    margin: 0 2rem;
+@media (min-width: 501px) and (max-width: 700px) {
+  :root {
+    --page-outer-margin-left: 2rem;
+    --page-outer-margin-right: 2rem;
+    /* gotta be a better way... */
+    --page-width: calc(100% - var(--page-outer-margin-left) - var(--page-outer-margin-right));
+  }
+
+  header {
+    margin-top: 3rem !important;
+  }
+}
+
+@media (max-width: 500px) {
+  :root {
+    --page-outer-margin-left: 1rem;
+    --page-outer-margin-right: 1rem;
+    --page-width: calc(100% - var(--page-outer-margin-left) - var(--page-outer-margin-right));
+
+    --page-inner-pad: 1rem;
+    --input-pad: 1rem;
+
+    --output-decor-pad: 0.75rem;
   }
 
   header {
@@ -187,6 +212,7 @@ header > h2 > i:nth-child(2) > svg {
 }
 
 .input-wrapper > input {
+  max-width: 100%;
   margin-top: -0.7rem;
   padding: 0;
   border: none;
@@ -207,11 +233,11 @@ header > h2 > i:nth-child(2) > svg {
 }
 
 #total-score {
-  max-width: 21%;
+  max-width: 5rem;
 }
 
 #max-score {
-  max-width: 20%;
+  max-width: 5rem;
 }
 
 #total-max-sep, #max-score {
@@ -302,12 +328,12 @@ header > h2 > i:nth-child(2) > svg {
 }
 
 #output-wrapper-main > i:nth-of-type(1) > svg {
-  margin-left: calc(-1 * var(--output-decor-pad));
+  margin-left: calc(-1 * (var(--output-decor-pad) + var(--output-decor-size)));
 }
 
 #output-wrapper-main > i:nth-of-type(2) > svg {
-  margin-right: calc(-1 * (var(--output-decor-pad) + var(--output-decor-size)));
-  padding-left: var(--output-decor-size);
+  /* margin-right: calc(-1 * (var(--output-decor-pad) + var(--output-decor-size))); */
+  padding-left: var(--output-decor-pad);
 }
 
 #output-wrapper-err {
