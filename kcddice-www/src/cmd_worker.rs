@@ -108,4 +108,8 @@ impl Worker for CmdWorker {
     fn name_of_resource() -> &'static str {
         "cmd-worker.js"
     }
+
+    fn resource_path_is_relative() -> bool {
+        true
+    }
 }
