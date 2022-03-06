@@ -226,6 +226,7 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
                     id="total-score",
                     name="total-score",
                     placeholder="0",
+                    inputmode="numeric",
                     bind:value=props.total_score_str,
                 )
                 span(id="total-max-sep") { "/" }
@@ -234,6 +235,7 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
                     id="max-score",
                     name="max-score",
                     placeholder="4000",
+                    inputmode="numeric",
                     bind:value=props.max_score_str,
                 )
             }
@@ -243,6 +245,7 @@ fn BestActionPage<'a, G: Html>(ctx: ScopeRef<'a>, props: BestActionPageProps<'a>
                     ref=round_score_input,
                     id="round-score",
                     name="round-score",
+                    inputmode="numeric",
                     bind:value=props.round_score_str,
                 )
             }
