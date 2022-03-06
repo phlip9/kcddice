@@ -6,6 +6,7 @@ set positional-arguments
 alias bw := build-www
 alias c := clippy
 alias dw := deploy-www
+alias sw := serve-www
 alias t := test
 alias ww := watch-www
 
@@ -36,15 +37,13 @@ build-www +PUBLIC_URL='/':
     --public-url "{{PUBLIC_URL}}" \
     -- kcddice-www/index.html
 
-serve-www: build-www
-  python3 -m http.server \
-    --bind 0.0.0.0 \
-    --directory kcddice-www/dist
+serve-www:
+  http kcddice-www/dist
 
 watch-www:
   cargo watch \
     --ignore kcddice-www/dist \
-    -s "just serve-www"
+    -s "just build-www"
 
 deploy-www: (build-www '/kcddice/')
   #!/usr/bin/env bash

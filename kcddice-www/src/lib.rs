@@ -341,37 +341,33 @@ fn BestActionOutput<G: Html>(ctx: ScopeRef, state: BestActionOutputState) -> Vie
 
 #[component]
 fn DiceMemnonicsTable<G: Html>(ctx: ScopeRef) -> View<G> {
-    let ncol = 3;
-    let dice_table = kcddice::dice_table(ncol);
+    let mut die_kinds = kcddice::dice::DieKind::all().to_vec();
+    die_kinds.sort_unstable_by_key(|die_kind| die_kind.as_memnonic());
 
-    let rows = View::new_fragment(
-        dice_table
-            .chunks_exact(ncol)
-            .map(|ks| match ks {
-                &[k1, k2, k3] => {
-                    view! { ctx,
-                        tr {
-                            td { (k1.0) }
-                            td { (k1.1) }
+    let entries = View::new_fragment(
+        die_kinds
+            .into_iter()
+            .map(|die_kind| {
+                let memnonic = if die_kind == kcddice::dice::DieKind::Standard {
+                    "s"
+                } else {
+                    die_kind.as_memnonic()
+                };
+                let name = die_kind.as_human_readable();
 
-                            td { (k2.0) }
-                            td { (k2.1) }
-
-                            td { (k3.0) }
-                            td { (k3.1) }
-                        }
+                view! { ctx,
+                    div(class="entry") {
+                        span(class="memnonic") { (memnonic) }
+                        span(class="name") { (name) }
                     }
                 }
-                _ => View::empty(),
             })
             .collect::<Vec<_>>(),
     );
 
     view! { ctx,
-        table(id="memnonics-table") {
-            tbody {
-                (rows)
-            }
+        div(id="memnonics-table") {
+            (entries)
         }
     }
 }

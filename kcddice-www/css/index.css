@@ -9,6 +9,7 @@
   --page-border-radius: 4px;
   --output-decor-size: 1.25rem;
   --output-decor-pad: 1.25rem;
+  --memnonics-table-rows: 6;
 }
 
 @font-face {
@@ -78,6 +79,8 @@ body::before {
     --input-pad: 1rem;
 
     --output-decor-pad: 0.75rem;
+
+    --memnonics-table-rows: 9;
   }
 
   header {
@@ -405,23 +408,22 @@ header > h2 > i:nth-child(2) > svg {
   /* letter-spacing: -0.03rem; */
   color: hsl(10, 19%, 55%);
   /* color: hsl(60, 4%, 55%); */
+
+  width: 100%;
+
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(var(--memnonics-table-rows), 1fr);
 }
 
-#memnonics-table td {
-  padding-left: 0;
+#memnonics-table .entry {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  grid-column-gap: 0.5rem;
 }
 
-#memnonics-table td:nth-of-type(odd) {
+#memnonics-table .memnonic {
   text-align: right;
-  padding-right: 0.5rem;
-}
-
-#memnonics-table td:nth-of-type(even) {
-  padding-right: 1rem;
-}
-
-#memnonics-table td:last-of-type {
-  padding-right: 0;
 }
 
 #links {
