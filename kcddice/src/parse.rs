@@ -392,7 +392,7 @@ pub mod prop {
 
     pub fn arb_dice_set() -> impl Strategy<Value = DiceSet> {
         prop_oneof! [
-            1 => (1_u8..=6).prop_map(|count| DiceSet::all_standard(count)),
+            1 => (1_u8..=6).prop_map(DiceSet::all_standard),
             5 => subsequence(DIE_KIND_MATRIX.as_slice(), 1..=6)
                     .prop_map(|die_kinds| DiceSet::from_flat_iter(die_kinds.into_iter())),
         ]

@@ -22,9 +22,10 @@
 #[macro_use]
 mod macros;
 
+mod agent;
+mod multiset;
 pub mod cli;
 pub mod dice;
-mod multiset;
 pub mod parse;
 pub mod search;
 

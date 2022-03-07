@@ -246,7 +246,7 @@ impl NormalizedStateAction {
 
     /// A pseudo initial state, before rolling the first set of dice.
     #[allow(unused)]
-    fn init_state(target_score: u16, dice_kinds: DieKindCounts) -> Self {
+    pub(crate) fn init_state(target_score: u16, dice_kinds: DieKindCounts) -> Self {
         Self {
             my_round_total: 0,
             target_score,
@@ -267,7 +267,11 @@ impl NormalizedStateAction {
     }
 
     #[inline]
-    fn from_state_roll_action(all_dice: DieKindCounts, state: State, held_dice: DiceVec) -> Self {
+    pub(crate) fn from_state_roll_action(
+        all_dice: DieKindCounts,
+        state: State,
+        held_dice: DiceVec,
+    ) -> Self {
         let dice_left = state.dice_left_after_hold(all_dice, held_dice);
 
         Self {
@@ -279,7 +283,7 @@ impl NormalizedStateAction {
     }
 
     #[inline]
-    fn into_state(self, rolled_dice: DiceVec) -> State {
+    pub(crate) fn into_state(self, rolled_dice: DiceVec) -> State {
         State {
             my_round_total: self.my_round_total,
             target_score: self.target_score,
@@ -338,7 +342,7 @@ impl NormalizedStateAction {
             // want to maximize expected value; choose action with
             // greatest expected value
             let best_action_value = next_state
-                .actions(ctxt)
+                .actions_cached(ctxt)
                 .iter()
                 .map(|&next_action| {
                     Self::from_state_action(ctxt.all_dice, next_state, next_action)
@@ -376,7 +380,7 @@ impl NormalizedStateAction {
 
         for (next_state, p_roll) in self.possible_roll_states(&kind_table) {
             let (_best_exp_value, best_score_distr) = next_state
-                .actions(ctxt)
+                .actions_cached(ctxt)
                 .iter()
                 .map(|&next_action| {
                     let distr = Self::from_state_action(ctxt.all_dice, next_state, next_action)
@@ -418,17 +422,8 @@ impl State {
         }
     }
 
-    /// From the current round `State` return the complete set of possible
-    /// `Action`s the player can take. Returns an empty set if the player has
-    /// "busted".
-    fn actions(&self, ctxt: &mut Context) -> Rc<Vec<Action>> {
-        // Luckily, the set of possible actions generated from a `State` is only
-        // dependent on the currently rolled dice.
-        if let Some(actions) = ctxt.actions_cache_mut().peek_cache(&self.rolled_dice) {
-            return actions;
-        }
-
-        let actions_vec = if self.rolled_dice.is_bust() {
+    pub(crate) fn actions(&self) -> Vec<Action> {
+        if self.rolled_dice.is_bust() {
             // if this dice roll has no scores whatsoever, then there are no actions
             // (our turn has ended).
             Vec::new()
@@ -457,10 +452,21 @@ impl State {
             actions_vec.push(Action::Pass);
 
             actions_vec
-        };
+        }
+    }
+
+    /// From the current round `State` return the complete set of possible
+    /// `Action`s the player can take. Returns an empty set if the player has
+    /// "busted".
+    fn actions_cached(&self, ctxt: &mut Context) -> Rc<Vec<Action>> {
+        // Luckily, the set of possible actions generated from a `State` is only
+        // dependent on the currently rolled dice.
+        if let Some(actions) = ctxt.actions_cache_mut().peek_cache(&self.rolled_dice) {
+            return actions;
+        }
 
         ctxt.actions_cache_mut()
-            .fill_cache(self.rolled_dice, Rc::new(actions_vec))
+            .fill_cache(self.rolled_dice, Rc::new(self.actions()))
     }
 
     /// Evaluate the expected value of applying this `Action` to the `State`,
@@ -511,7 +517,7 @@ impl State {
     /// action, what is the expected turn score and bust probability?
     pub fn actions_by_expected_value(&self, ctxt: &mut Context) -> Vec<ActionValue> {
         let mut actions_values = self
-            .actions(ctxt)
+            .actions_cached(ctxt)
             .iter()
             .map(|&action| ActionValue {
                 action,
@@ -593,11 +599,25 @@ impl ScorePMF {
         Self::constant(0)
     }
 
+    #[cfg(test)]
+    pub fn from_counts_iter(
+        num_trials: usize,
+        counts: impl IntoIterator<Item = (u16, usize)>,
+    ) -> Self {
+        let n = num_trials as f64;
+        Self(
+            counts
+                .into_iter()
+                .map(|(score, count)| (score, (count as f64) / n))
+                .collect(),
+        )
+    }
+
     pub fn into_vec(self) -> Vec<(u16, f64)> {
         self.0.into_iter().collect()
     }
 
-    fn to_dense(&self, target_score: u16) -> Array1<f64> {
+    pub(crate) fn to_dense(&self, target_score: u16) -> Array1<f64> {
         let num_states = MarkovMatrix::num_states(target_score);
 
         let mut dense_pmf = Array1::zeros(num_states);
@@ -620,6 +640,25 @@ impl ScorePMF {
             .sum()
     }
 
+    pub fn variance(&self) -> f64 {
+        // Var(X) = E[(X - E[X])^2]
+        //        = sum_x (Pr[X = x] * (x - E[X])^2)
+        // mu = E[X]
+        let mu = self.expected_value();
+
+        self.0
+            .iter()
+            .map(|(&score, &p_score)| {
+                let diff = (score as f64) - mu;
+                p_score * diff * diff
+            })
+            .sum()
+    }
+
+    pub fn stddev(&self) -> f64 {
+        self.variance().sqrt()
+    }
+
     pub fn add_conditional_distr(&mut self, p_cond: f64, cond_distr: &Self) {
         use std::ops::AddAssign;
         for (&score, &p_score) in &cond_distr.0 {
@@ -632,6 +671,52 @@ impl ScorePMF {
 
     pub fn total_mass(&self) -> f64 {
         self.0.values().sum()
+    }
+
+    #[cfg(test)]
+    pub fn compare_pmfs(&self, other: &Self, target_score: u16) {
+        println!();
+        println!("E[X_1] = {:<}", self.expected_value());
+        println!("E[X_2] = {:<}", other.expected_value());
+        println!();
+        println!("stddev(X_1) = {:<}", self.stddev());
+        println!("stddev(X_2) = {:<}", other.stddev());
+        println!();
+
+        let mut table = tabular::Table::new("{:>}  {:<}  {:<}  {:<}  {:<}");
+        table.add_row(tabular::row!(
+            "score",
+            "pmf1",
+            "pmf2",
+            "|pmf1-pmf2|",
+            "(pmf1-pmf2)^2"
+        ));
+
+        let pmf1 = self.to_dense(target_score);
+        let pmf2 = other.to_dense(target_score);
+        assert_eq!(pmf1.len(), pmf2.len());
+
+        let err = &pmf1 - &pmf2;
+        let l1_diff = err.mapv(|x| x.abs());
+        let err_sq = err.mapv(|x| x * x);
+
+        for idx in 0..pmf1.len() {
+            let score = MarkovMatrix::i2s(idx);
+            let p_score_1 = pmf1[idx];
+            let p_score_2 = pmf2[idx];
+            let l1_diff = l1_diff[idx];
+            let err_sq = err_sq[idx];
+            table.add_row(tabular::row!(score, p_score_1, p_score_2, l1_diff, err_sq));
+        }
+
+        println!(
+            "max_x |p1(x)-p2(x)| = {:<}",
+            l1_diff.iter().max_by(|x, y| total_cmp_f64(x, y)).unwrap()
+        );
+        println!("E[|pmf1 - pmf2|] = {:<}", l1_diff.mean().unwrap());
+        println!("√ E[(pmf1 - pmf2)^2] = {:<}", err_sq.mean().unwrap().sqrt());
+
+        println!("\n{table}");
     }
 }
 
@@ -659,7 +744,7 @@ impl MarkovMatrix {
 
     /// state index to score
     #[inline]
-    const fn i2s(state_idx: usize) -> u16 {
+    pub(crate) const fn i2s(state_idx: usize) -> u16 {
         (state_idx * 50) as u16
     }
 

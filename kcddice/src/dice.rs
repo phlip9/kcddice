@@ -59,14 +59,12 @@ impl DieDistr {
             } else {
                 4
             }
+        } else if r > self.0[2] {
+            3
+        } else if r > self.0[1] {
+            2
         } else {
-            if r > self.0[2] {
-                3
-            } else if r > self.0[1] {
-                2
-            } else {
-                1
-            }
+            1
         }
     }
 }
@@ -1626,7 +1624,7 @@ pub mod prop {
     }
 
     pub fn arb_rng() -> impl Strategy<Value = Xoroshiro64Star> {
-        any::<u64>().prop_map(|seed| Xoroshiro64Star::seed_from_u64(seed))
+        any::<u64>().prop_map(Xoroshiro64Star::seed_from_u64)
     }
 }
 
