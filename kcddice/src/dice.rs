@@ -10,6 +10,10 @@ use proptest::{
     arbitrary::Arbitrary,
     strategy::{BoxedStrategy, Strategy},
 };
+use rand::{
+    distributions::{Distribution, Open01},
+    Rng,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     cmp, fmt,
@@ -41,6 +45,37 @@ impl DieDistr {
     #[inline]
     fn p_face(&self, face: u8) -> f64 {
         self.0[face as usize] - self.0[(face - 1) as usize]
+    }
+
+    /// convert a standard sample r ∈ (0, 1) to a die face, according to this CDF.
+    #[inline]
+    fn sample_to_face(&self, r: f64) -> u8 {
+        // just inline a binary search lol
+        if r > self.0[3] {
+            if r > self.0[5] {
+                6
+            } else if r > self.0[4] {
+                5
+            } else {
+                4
+            }
+        } else {
+            if r > self.0[2] {
+                3
+            } else if r > self.0[1] {
+                2
+            } else {
+                1
+            }
+        }
+    }
+}
+
+impl Distribution<u8> for DieDistr {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> u8 {
+        // sample r ∈ (0, 1)
+        let r = Open01.sample(rng);
+        self.sample_to_face(r)
     }
 }
 
@@ -1506,7 +1541,10 @@ mod test {
     use super::*;
     use crate::{num_combinations, parse};
     use approx::assert_relative_eq;
+    use claim::assert_le;
     use proptest::{array::uniform8, prelude::*};
+    use rand::SeedableRng;
+    use rand_xoshiro::Xoroshiro64Star;
     use std::{cmp::min, collections::HashSet};
 
     macro_rules! table {
@@ -2049,5 +2087,46 @@ mod test {
                 dice_vec1.cmp(&dice_vec2),
             );
         });
+    }
+
+    /// let X be some unknown Bernoulli distribution
+    /// let p_actual be the _actual_ probability Pr[X = 1]
+    /// let p_emp be our _empirical_ probability Pr[X = 1]
+    /// let E = max_l1_error >= |p - r|_1 be our maximum tolerated error
+    /// let Z = confidence level, given as Z-level of N(0, 1)
+    ///
+    /// => required number of trials is n = Z^2 / (4 E^2)
+    fn num_trials(max_l1_error: f64, confidence: f64) -> usize {
+        ((confidence * confidence) / (4.0 * (max_l1_error * max_l1_error))).ceil() as usize
+    }
+
+    // ensure DieDistr::sample returns approx. the true distribution.
+    #[test]
+    fn test_die_distr_sample() {
+        // number of trials for at-most 1% error at 5σ confidence (=> n = 62,500)
+        let max_err = 0.01;
+        let confidence = 5.0;
+        let n = num_trials(max_err, confidence);
+        let mut rng = Xoroshiro64Star::seed_from_u64(0xd15c0);
+
+        for die_kind in DieKind::all() {
+            let distr = die_kind.die_distr();
+
+            let counts = distr.clone().sample_iter(&mut rng).take(n).fold(
+                [0_usize; 6],
+                |mut counts, face| {
+                    counts[(face - 1) as usize] += 1;
+                    counts
+                },
+            );
+            let emp_distr = counts.map(|count| (count as f64) / (n as f64));
+
+            for face in 1..=6 {
+                let p_actual = distr.p_face(face);
+                let p_emp = emp_distr[(face - 1) as usize];
+                let err = (p_actual - p_emp).abs();
+                assert_le!(err, max_err);
+            }
+        }
     }
 }
