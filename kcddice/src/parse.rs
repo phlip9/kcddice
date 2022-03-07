@@ -82,6 +82,17 @@ impl DiceSet {
 
         Ok(())
     }
+
+    #[cfg(test)]
+    fn from_flat_iter(iter: impl Iterator<Item = DieKind>) -> Self {
+        use std::ops::AddAssign;
+
+        let mut out = Self::new();
+        for die_kind in iter {
+            out.0.entry(die_kind).or_insert(0).add_assign(1)
+        }
+        out
+    }
 }
 
 impl Default for DiceSet {
@@ -372,6 +383,25 @@ impl fmt::Display for Action {
         }
     }
 }
+
+#[cfg(test)]
+pub mod prop {
+    use super::*;
+    use crate::dice::prop::DIE_KIND_MATRIX;
+    use proptest::{prelude::*, sample::subsequence};
+
+    pub fn arb_dice_set() -> impl Strategy<Value = DiceSet> {
+        prop_oneof! [
+            1 => (1_u8..=6).prop_map(|count| DiceSet::all_standard(count)),
+            5 => subsequence(DIE_KIND_MATRIX.as_slice(), 1..=6)
+                    .prop_map(|die_kinds| DiceSet::from_flat_iter(die_kinds.into_iter())),
+        ]
+    }
+}
+
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod test {

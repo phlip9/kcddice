@@ -3,11 +3,13 @@
 set shell := ["bash", "-uc"]
 set positional-arguments
 
-alias bw := build-www
 alias c := clippy
+alias t := test
+alias wt := watch-test
+
+alias bw := build-www
 alias dw := deploy-www
 alias sw := serve-www
-alias t := test
 alias ww := watch-www
 
 default:
@@ -25,8 +27,12 @@ install-dev:
     cargo-watch \
     rustfilt
 
-test:
-  RUST_BACKTRACE=1 cargo test
+test *args='':
+  RUST_BACKTRACE=1 cargo test --lib -- $@
+
+watch-test *args='':
+  cargo watch \
+    -s "just test $@"
 
 clippy:
   cargo clippy --all-targets

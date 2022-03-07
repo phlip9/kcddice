@@ -122,14 +122,14 @@ pub enum DieKind {
     Ambrose,
     Biased,
     Even,
-    HenrysBeta,
     HeavenlyKingdomDie,
+    HenrysBeta,
     HolyTrinity,
     LuCiFer,
     Lucky,
     LuckyPlaying,
-    OddDie,
     Misfortune,
+    OddDie,
     Shrinking,
     Strip,
     TheCommonest,
@@ -144,21 +144,21 @@ impl Default for DieKind {
 }
 
 impl DieKind {
-    pub const fn all() -> [DieKind; 17] {
-        [
+    pub const fn all() -> &'static [DieKind; 17] {
+        &[
             Self::Standard,
             Self::Alfonse,
             Self::Ambrose,
             Self::Biased,
             Self::Even,
-            Self::HenrysBeta,
             Self::HeavenlyKingdomDie,
+            Self::HenrysBeta,
             Self::HolyTrinity,
             Self::LuCiFer,
             Self::Lucky,
             Self::LuckyPlaying,
-            Self::OddDie,
             Self::Misfortune,
+            Self::OddDie,
             Self::Shrinking,
             Self::Strip,
             Self::TheCommonest,
@@ -168,6 +168,30 @@ impl DieKind {
 
     fn is_sentinel(self) -> bool {
         self == Self::SENTINEL
+    }
+
+    pub const fn from_u8(idx: u8) -> Self {
+        match idx {
+            0 => panic!("SENTINEL"),
+            1 => Self::Standard,
+            2 => Self::Alfonse,
+            3 => Self::Ambrose,
+            4 => Self::Biased,
+            5 => Self::Even,
+            6 => Self::HeavenlyKingdomDie,
+            7 => Self::HenrysBeta,
+            8 => Self::HolyTrinity,
+            9 => Self::LuCiFer,
+            10 => Self::Lucky,
+            11 => Self::LuckyPlaying,
+            12 => Self::Misfortune,
+            13 => Self::OddDie,
+            14 => Self::Shrinking,
+            15 => Self::Strip,
+            16 => Self::TheCommonest,
+            17 => Self::Unpopular,
+            _ => panic!("UNKNOWN"),
+        }
     }
 
     pub fn from_memnonic(s: &str) -> Option<Self> {
@@ -480,10 +504,34 @@ impl DieKindCounts {
         out
     }
 
+    /// Returns an `Iterator` of `(kind_idx: u8, count: u8)` tuples.
     #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn into_iter(self) -> impl Iterator<Item = (u8, u8)> {
         self.0.into_iter()
+    }
+
+    pub(crate) fn roll_dice<R: Rng>(self, rng: &mut R, dice_table: DieKindTable) -> DiceVec {
+        let mut dice_arr = [Die::sentinel(); 6];
+        let mut die_idx = 0;
+
+        for (kind_idx, count) in self.into_iter().filter(|(_, count)| *count > 0) {
+            // println!("roll_dice -> kind_idx: {kind_idx}, count: {count}");
+
+            let distr = dice_table.get_kind(kind_idx).die_distr();
+            for face in distr.sample_iter(&mut *rng).take(count as usize) {
+                dice_arr[die_idx] = Die::new(face, kind_idx);
+                die_idx += 1;
+            }
+        }
+
+        dice_arr[0..die_idx].sort_unstable();
+        // println!("roll_dice -> dice_arr: {dice_arr:?}")
+
+        let dice_vec = DiceVec::from_array6(dice_arr);
+        debug_assert!(dice_vec.invariant());
+
+        dice_vec
     }
 }
 
@@ -614,7 +662,7 @@ const _: [(); 1] = [(); std::mem::size_of::<Die>()];
 /// without iteration or branches in many cases by using lots of ugly bit-twiddling
 /// hacks : )
 #[repr(transparent)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 pub struct DiceVec(u64);
 
 impl_total_size_static!(DiceVec);
@@ -931,6 +979,13 @@ impl Hash for DiceVec {
     #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(self.as_u64())
+    }
+}
+
+impl fmt::Debug for DiceVec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dice = self.into_iter_no_sentinel().collect::<Vec<_>>();
+        write!(f, "{:?}", dice)
     }
 }
 
@@ -1532,13 +1587,56 @@ cfg_test! {
     }
 }
 
+#[cfg(test)]
+pub mod prop {
+    use super::*;
+    use proptest::{prelude::*, sample::select};
+    use rand::SeedableRng;
+    use rand_xoshiro::Xoroshiro64Star;
+
+    const N: usize = DieKind::all().len();
+    pub static DIE_KIND_MATRIX: [DieKind; N * N] = die_kind_matrix();
+
+    pub const fn die_kind_matrix() -> [DieKind; N * N] {
+        const N: usize = DieKind::all().len();
+        let mut out = [DieKind::SENTINEL; N * N];
+
+        let mut idx = 0;
+
+        loop {
+            if idx >= N * N {
+                break;
+            }
+
+            let kind = (idx / N) + 1;
+            out[idx] = DieKind::from_u8(kind as u8);
+
+            idx += 1;
+        }
+
+        out
+    }
+
+    pub fn arb_die_kind() -> impl Strategy<Value = DieKind> {
+        select(DieKind::all().as_slice())
+    }
+
+    pub fn arb_dice_set_compact() -> impl Strategy<Value = (DieKindTable, DieKindCounts)> {
+        crate::parse::prop::arb_dice_set().prop_map(|dice_set| dice_set.to_compact_form())
+    }
+
+    pub fn arb_rng() -> impl Strategy<Value = Xoroshiro64Star> {
+        any::<u64>().prop_map(|seed| Xoroshiro64Star::seed_from_u64(seed))
+    }
+}
+
 ///////////
 // Tests //
 ///////////
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use super::{prop::*, *};
     use crate::{num_combinations, parse};
     use approx::assert_relative_eq;
     use claim::assert_le;
@@ -2128,5 +2226,23 @@ mod test {
                 assert_le!(err, max_err);
             }
         }
+    }
+
+    #[test]
+    fn test_dice_vec_roll_dice() {
+        proptest!(niters(10), |((dice_table, die_kind_counts) in arb_dice_set_compact(), mut rng in arb_rng())| {
+            let possible_rolls = die_kind_counts
+                .all_multisets()
+                .into_iter()
+                .collect::<HashSet<_>>();
+
+            // println!("possible_rolls: {possible_rolls:?}");
+
+            for _ in 0..100 {
+                let rolled_dice = die_kind_counts.roll_dice(&mut rng, dice_table);
+                // println!("rolled_dice: {rolled_dice:?}");
+                prop_assert!(possible_rolls.contains(&rolled_dice));
+            }
+        });
     }
 }
