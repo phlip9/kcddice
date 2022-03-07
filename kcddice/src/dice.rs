@@ -22,23 +22,58 @@ use std::{
 // TODO(philiphayes): implement jokers/devils
 // const FACE_JOKER: u8 = 0;
 
+/// A DieKind's face distribution, as a cumulative distribution function (CDF)
+/// for more efficient sampling.
+#[derive(Clone)]
 pub struct DieDistr([f64; 8]);
 
 impl DieDistr {
-    const fn new(distr: [f64; 6]) -> Self {
-        Self([
-            0.0, distr[0], distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
-        ])
+    const fn new(cdf: [f64; 6]) -> Self {
+        Self([0.0, cdf[0], cdf[1], cdf[2], cdf[3], cdf[4], cdf[5], 0.0])
     }
 
-    // const fn new_joker(distr: [f64; 6]) -> Self {
+    // const fn new_joker(cdf: [f64; 6]) -> Self {
     //     Self([
-    //         distr[0], 0.0, distr[1], distr[2], distr[3], distr[4], distr[5], 0.0,
+    //         cdf[0], 0.0, cdf[1], cdf[2], cdf[3], cdf[4], cdf[5], 0.0,
     //     ])
     // }
 
-    const fn p_face(&self, face: u8) -> f64 {
-        self.0[face as usize]
+    #[inline]
+    fn p_face(&self, face: u8) -> f64 {
+        self.0[face as usize] - self.0[(face - 1) as usize]
+    }
+}
+
+// very annoying hack b/c we can't do float arithmetic in const fn's...
+macro_rules! die_distr {
+    ($p_unif:expr) => {
+        die_distr![$p_unif, $p_unif, $p_unif, $p_unif, $p_unif, $p_unif]
+    };
+    // pi := Pr[Roll_{die_kind} = i]
+    ($p1:expr, $p2:expr, $p3:expr, $p4:expr, $p5:expr, $p6:expr $(,)?) => {
+        // cumsum the pmf into a cdf
+        DieDistr::new([
+            $p1,
+            $p1 + $p2,
+            $p1 + $p2 + $p3,
+            $p1 + $p2 + $p3 + $p4,
+            $p1 + $p2 + $p3 + $p4 + $p5,
+            $p1 + $p2 + $p3 + $p4 + $p5 + $p6,
+        ])
+    };
+}
+
+impl fmt::Debug for DieDistr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pmf = [
+            self.p_face(1),
+            self.p_face(2),
+            self.p_face(3),
+            self.p_face(4),
+            self.p_face(5),
+            self.p_face(6),
+        ];
+        write!(f, "{:?}", pmf)
     }
 }
 
@@ -177,78 +212,78 @@ impl DieKind {
 
         match self {
             Self::SENTINEL => panic!("SENTINEL"),
-            Self::Standard | Self::TheCommonest => DieDistr::new([1.0 / 6.0; 6]),
-            Self::Alfonse => DieDistr::new([0.385, 0.077, 0.077, 0.077, 0.154, 0.230]),
-            Self::Ambrose => DieDistr::new([0.286, 0.214, 0.0715, 0.0715, 0.143, 0.214]),
-            Self::Biased => DieDistr::new([
+            Self::Standard | Self::TheCommonest => die_distr![1.0 / 6.0],
+            Self::Alfonse => die_distr![0.385, 0.077, 0.077, 0.077, 0.154, 0.230],
+            Self::Ambrose => die_distr![0.286, 0.214, 0.0715, 0.0715, 0.143, 0.214],
+            Self::Biased => die_distr![
                 3.0 / 12.0,
                 4.0 / 12.0,
                 1.0 / 12.0,
                 1.0 / 12.0,
                 2.0 / 12.0,
                 1.0 / 12.0,
-            ]),
-            Self::LuCiFer => DieDistr::new([0.13, 0.13, 0.13, 0.13, 0.13, 0.35]),
-            Self::Even => DieDistr::new([
+            ],
+            Self::LuCiFer => die_distr![0.13, 0.13, 0.13, 0.13, 0.13, 0.35],
+            Self::Even => die_distr![
                 1.0 / 15.0,
                 4.0 / 15.0,
                 1.0 / 15.0,
                 4.0 / 15.0,
                 1.0 / 15.0,
                 4.0 / 15.0,
-            ]),
-            Self::HenrysBeta => DieDistr::new([
+            ],
+            Self::HenrysBeta => die_distr![
                 1.0 / 9.0,
                 4.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
-            ]),
-            Self::HeavenlyKingdomDie => DieDistr::new([0.368, 0.105, 0.105, 0.105, 0.105, 0.212]),
-            Self::HolyTrinity => DieDistr::new([0.182, 0.228, 0.455, 0.045, 0.045, 0.045]),
-            Self::Lucky => DieDistr::new([0.273, 0.045, 0.091, 0.136, 0.182, 0.273]),
-            Self::LuckyPlaying => DieDistr::new([
+            ],
+            Self::HeavenlyKingdomDie => die_distr![0.368, 0.105, 0.105, 0.105, 0.105, 0.212],
+            Self::HolyTrinity => die_distr![0.182, 0.228, 0.455, 0.045, 0.045, 0.045],
+            Self::Lucky => die_distr![0.273, 0.045, 0.091, 0.136, 0.182, 0.273],
+            Self::LuckyPlaying => die_distr![
                 6.0 / 18.0,
                 0.0,
                 1.0 / 18.0,
                 1.0 / 18.0,
                 6.0 / 18.0,
                 4.0 / 18.0,
-            ]),
-            Self::Misfortune => DieDistr::new([4.6, 22.7, 22.7, 22.7, 22.7, 4.6]),
-            Self::OddDie => DieDistr::new([
+            ],
+            Self::Misfortune => die_distr![0.046, 0.227, 0.227, 0.227, 0.227, 0.046],
+            Self::OddDie => die_distr![
                 4.0 / 15.0,
                 1.0 / 15.0,
                 4.0 / 15.0,
                 1.0 / 15.0,
                 4.0 / 15.0,
                 1.0 / 15.0,
-            ]),
-            Self::Shrinking => DieDistr::new([
+            ],
+            Self::Shrinking => die_distr![
                 2.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
                 1.0 / 9.0,
                 3.0 / 9.0,
-            ]),
-            Self::Strip => DieDistr::new([
+            ],
+            Self::Strip => die_distr![
                 4.0 / 16.0,
                 2.0 / 16.0,
                 2.0 / 16.0,
                 2.0 / 16.0,
                 3.0 / 16.0,
                 3.0 / 16.0,
-            ]),
-            Self::Unpopular => DieDistr::new([
+            ],
+            Self::Unpopular => die_distr![
                 1.0 / 11.0,
                 3.0 / 11.0,
                 2.0 / 11.0,
                 2.0 / 11.0,
                 2.0 / 11.0,
                 1.0 / 11.0,
-            ]),
+            ],
         }
     }
 }
