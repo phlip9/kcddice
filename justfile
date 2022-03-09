@@ -4,6 +4,7 @@ set shell := ["bash", "-uc"]
 set positional-arguments
 
 alias c := clippy
+alias wc := watch-clippy
 alias t := test
 alias wt := watch-test
 
@@ -36,6 +37,10 @@ watch-test *args='':
 
 clippy:
   cargo clippy --all-targets
+
+watch-clippy *args='':
+  cargo watch \
+    -s "just clippy $@"
 
 build-www +PUBLIC_URL='/':
   trunk build \

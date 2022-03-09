@@ -1,5 +1,6 @@
 use crate::{
     dice::{DiceVec, DieKindCounts, DieKindTable},
+    stats::p_rv1_le_rv2,
     total_cmp_f64, TotalSize,
 };
 use bytesize::ByteSize;
@@ -802,45 +803,6 @@ impl MarkovMatrix {
     }
 }
 
-/// Given `X_1` and `X_2` independent random variables defined by CDFs `cdf1` and
-/// `cdf2` respectively, returns the `Pr[X_1 <= X_2]`. Both "CDF" arrays must be
-/// the same length and have the same support at each index.
-pub fn p_rv1_lte_rv2(cdf1: ArrayView1<f64>, cdf2: ArrayView1<f64>) -> f64 {
-    assert_eq!(cdf1.len(), cdf2.len());
-
-    // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
-    let p = 0.0;
-
-    // c1_i1 = cdf1[i - 1] = Pr[X_1 <= prev(x_i)]
-    let c1_i1 = 0.0;
-
-    // c2_i1 = cdf2[i - 1] = Pr[X_2 <= prev(x_i)]
-    let c2_i1 = 0.0;
-
-    let (p, _c1_i1, _c2_i2) = cdf1.into_iter().zip(cdf2.into_iter()).fold(
-        (p, c1_i1, c2_i1),
-        |(p, c1_i1, c2_i1), (&c1_i, &c2_i)| {
-            // c1_i = cdf1[i] = Pr[X_1 <= x_i]
-            // c2_i = cdf2[i] = Pr[X_2 <= x_i]
-
-            // p_1 = Pr[X_1 = x_i]
-            //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
-            //     = cdf1[i] - cdf1[i - 1]
-            let p_1 = c1_i - c1_i1;
-
-            // p_2 = Pr[X_2 >= x_i]
-            //     = 1 - Pr[X_2 < x_i]
-            //     = 1 - Pr[X_2 <= prev(x_i)]
-            //     = 1 - cdf2[i - 1]
-            let p_2 = 1.0 - c2_i1;
-
-            (p + (p_1 * p_2), c1_i, c2_i)
-        },
-    );
-
-    p
-}
-
 ///////////
 // Tests //
 ///////////
@@ -969,20 +931,20 @@ pub fn p_rv1_lte_rv2(cdf1: ArrayView1<f64>, cdf2: ArrayView1<f64>) -> f64 {
 //     }
 //
 //     #[test]
-//     fn test_p_rv1_lte_rv2() {
+//     fn test_p_rv1_le_rv2() {
 //         let cdf1 = Array1::from_vec(vec![0.1, 0.6, 1.0]);
 //         let cdf2 = Array1::from_vec(vec![0.3, 0.7, 1.0]);
 //
 //         assert_relative_eq!(
 //             p_rv_lte_itself(cdf1.view()),
-//             p_rv1_lte_rv2(cdf1.view(), cdf1.view())
+//             p_rv1_le_rv2(cdf1.view(), cdf1.view())
 //         );
 //
 //         assert_relative_eq!(
 //             p_rv_lte_itself(cdf2.view()),
-//             p_rv1_lte_rv2(cdf2.view(), cdf2.view())
+//             p_rv1_le_rv2(cdf2.view(), cdf2.view())
 //         );
 //
-//         assert_relative_eq!(0.57, p_rv1_lte_rv2(cdf1.view(), cdf2.view()));
+//         assert_relative_eq!(0.57, p_rv1_le_rv2(cdf1.view(), cdf2.view()));
 //     }
 // }

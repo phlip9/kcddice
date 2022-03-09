@@ -21,15 +21,17 @@
 
 #[macro_use]
 mod macros;
-
 mod agent;
 mod multiset;
 pub mod cli;
 pub mod dice;
 pub mod parse;
 pub mod search;
+mod stats;
 
 use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
+#[cfg(test)]
+use rand_xoshiro::Xoroshiro64Star;
 
 pub(crate) const DEFAULT_TOTAL_SCORE: u16 = 0;
 pub(crate) const DEFAULT_MAX_SCORE: u16 = 4000;
@@ -402,6 +404,12 @@ pub fn dice_table(ncol: usize) -> Vec<(&'static str, &'static str)> {
             }
         })
         .collect::<Vec<_>>()
+}
+
+#[cfg(test)]
+pub fn small_rng(seed: u64) -> Xoroshiro64Star {
+    use rand::SeedableRng;
+    Xoroshiro64Star::seed_from_u64(seed)
 }
 
 ///////////

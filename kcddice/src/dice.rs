@@ -36,6 +36,32 @@ impl DieDistr {
         Self([0.0, cdf[0], cdf[1], cdf[2], cdf[3], cdf[4], cdf[5], 0.0])
     }
 
+    /// Would use this instead of hacky macro below, but can't do float arithmetic
+    /// in const functions...
+    #[cfg(test)]
+    fn from_pmf(p: [f64; 6]) -> Self {
+        Self::new([
+            p[0],
+            p[0] + p[1],
+            p[0] + p[1] + p[2],
+            p[0] + p[1] + p[2] + p[3],
+            p[0] + p[1] + p[2] + p[3] + p[4],
+            1.0,
+        ])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_pmf(self) -> [f64; 6] {
+        [
+            self.p_face(1),
+            self.p_face(2),
+            self.p_face(3),
+            self.p_face(4),
+            self.p_face(5),
+            self.p_face(6),
+        ]
+    }
+
     // const fn new_joker(cdf: [f64; 6]) -> Self {
     //     Self([
     //         cdf[0], 0.0, cdf[1], cdf[2], cdf[3], cdf[4], cdf[5], 0.0,
@@ -91,7 +117,7 @@ macro_rules! die_distr {
             $p1 + $p2 + $p3,
             $p1 + $p2 + $p3 + $p4,
             $p1 + $p2 + $p3 + $p4 + $p5,
-            $p1 + $p2 + $p3 + $p4 + $p5 + $p6,
+            1.0,
         ])
     };
 }
@@ -262,7 +288,7 @@ impl DieKind {
         }
     }
 
-    fn die_distr(self) -> DieDistr {
+    pub(crate) fn die_distr(self) -> DieDistr {
         // not all dice probabilities on the wiki add up to 1.0 exactly, so
         // without better info, I'm going to slightly bias the dice against 1
         // and 5 (the best rolls) to make everything add up : )

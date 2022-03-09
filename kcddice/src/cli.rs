@@ -1,7 +1,8 @@
 use crate::{
     dice::DieKindTable,
     parse,
-    search::{p_rv1_lte_rv2, ActionValue, Context, MarkovMatrix, NormalizedStateAction, State},
+    search::{ActionValue, Context, MarkovMatrix, NormalizedStateAction, State},
+    stats::p_rv1_le_rv2,
     DEFAULT_MAX_SCORE, DEFAULT_TOTAL_SCORE,
 };
 use pico_args;
@@ -772,7 +773,7 @@ OPTIONS:
         // For the typical setup (target=4000, our dice=6 normal, their dice=6
         // normal), this is ≈0.562. The Kelley-Criterion optimal bet is then 12.5%
         // of your total wealth.
-        let p_win = p_rv1_lte_rv2(our_turns_cdf.view(), their_turns_cdf.view());
+        let p_win = p_rv1_le_rv2(our_turns_cdf.view(), their_turns_cdf.view());
 
         let mut metrics = Metrics::new();
         metrics.push("search_duration", format!("{:.2?}", search_duration));
