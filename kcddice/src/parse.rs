@@ -388,12 +388,15 @@ impl fmt::Display for Action {
 pub mod prop {
     use super::*;
     use crate::dice::prop::DIE_KIND_MATRIX;
-    use proptest::{prelude::*, sample::subsequence};
+    use proptest::{collection::SizeRange, prelude::*, sample::subsequence};
+    use std::ops::{Range, RangeInclusive};
 
-    pub fn arb_dice_set() -> impl Strategy<Value = DiceSet> {
+    pub fn arb_dice_set(ndice: impl Into<RangeInclusive<u8>>) -> impl Strategy<Value = DiceSet> {
+        let ndice_u8 = ndice.into();
+        let ndice_usize = (*ndice_u8.start() as usize)..=(*ndice_u8.end() as usize);
         prop_oneof! [
-            1 => (1_u8..=6).prop_map(DiceSet::all_standard),
-            5 => subsequence(DIE_KIND_MATRIX.as_slice(), 1..=6)
+            1 => ndice_u8.prop_map(DiceSet::all_standard),
+            5 => subsequence(DIE_KIND_MATRIX.as_slice(), ndice_usize)
                     .prop_map(|die_kinds| DiceSet::from_flat_iter(die_kinds.into_iter())),
         ]
     }

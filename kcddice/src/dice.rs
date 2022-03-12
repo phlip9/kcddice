@@ -1615,8 +1615,6 @@ cfg_test! {
 pub mod prop {
     use super::*;
     use proptest::{prelude::*, sample::select};
-    use rand::SeedableRng;
-    use rand_xoshiro::Xoroshiro64Star;
 
     const N: usize = DieKind::all().len();
     pub static DIE_KIND_MATRIX: [DieKind; N * N] = die_kind_matrix();
@@ -1646,11 +1644,7 @@ pub mod prop {
     }
 
     pub fn arb_dice_set_compact() -> impl Strategy<Value = (DieKindTable, DieKindCounts)> {
-        crate::parse::prop::arb_dice_set().prop_map(|dice_set| dice_set.to_compact_form())
-    }
-
-    pub fn arb_rng() -> impl Strategy<Value = Xoroshiro64Star> {
-        any::<u64>().prop_map(Xoroshiro64Star::seed_from_u64)
+        crate::parse::prop::arb_dice_set(1..=6).prop_map(|dice_set| dice_set.to_compact_form())
     }
 }
 
@@ -1661,12 +1655,11 @@ pub mod prop {
 #[cfg(test)]
 mod test {
     use super::{prop::*, *};
+    use crate::prop::{arb_rng, niters, small_rng};
     use crate::{num_combinations, parse};
     use approx::assert_relative_eq;
     use claim::assert_le;
     use proptest::{array::uniform8, prelude::*};
-    use rand::SeedableRng;
-    use rand_xoshiro::Xoroshiro64Star;
     use std::{cmp::min, collections::HashSet};
 
     macro_rules! table {
@@ -2143,10 +2136,6 @@ mod test {
         ]
     }
 
-    fn niters(n: u32) -> ProptestConfig {
-        ProptestConfig::with_cases(n)
-    }
-
     // ensure `Die`'s ordering is the same as the lexicographic ordering, i.e.,
     // compare faces, then compare kind_idxs.
     #[test]
@@ -2229,7 +2218,7 @@ mod test {
         let max_err = 0.01;
         let confidence = 5.0;
         let n = num_trials(max_err, confidence);
-        let mut rng = Xoroshiro64Star::seed_from_u64(0xd15c0);
+        let mut rng = small_rng(0xd15c0);
 
         for die_kind in DieKind::all() {
             let distr = die_kind.die_distr();

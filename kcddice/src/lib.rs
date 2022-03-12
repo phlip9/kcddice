@@ -30,8 +30,6 @@ pub mod search;
 mod stats;
 
 use std::{cmp, ops::Deref, rc::Rc, collections::HashMap};
-#[cfg(test)]
-use rand_xoshiro::Xoroshiro64Star;
 
 pub(crate) const DEFAULT_TOTAL_SCORE: u16 = 0;
 pub(crate) const DEFAULT_MAX_SCORE: u16 = 4000;
@@ -407,9 +405,23 @@ pub fn dice_table(ncol: usize) -> Vec<(&'static str, &'static str)> {
 }
 
 #[cfg(test)]
-pub fn small_rng(seed: u64) -> Xoroshiro64Star {
+pub mod prop {
+    use proptest::prelude::*;
+    use rand_xoshiro::Xoroshiro64Star;
     use rand::SeedableRng;
-    Xoroshiro64Star::seed_from_u64(seed)
+
+    pub fn small_rng(seed: u64) -> Xoroshiro64Star {
+        Xoroshiro64Star::seed_from_u64(seed)
+    }
+
+    pub fn arb_rng() -> impl Strategy<Value = Xoroshiro64Star> {
+        any::<u64>().prop_map(small_rng)
+            .no_shrink()
+    }
+
+    pub fn niters(n: u32) -> ProptestConfig {
+        ProptestConfig::with_cases(n)
+    }
 }
 
 ///////////
@@ -418,6 +430,7 @@ pub fn small_rng(seed: u64) -> Xoroshiro64Star {
 
 #[cfg(test)]
 mod test {
+    use crate::prop::niters;
     use super::*;
     use proptest::prelude::*;
 
@@ -430,10 +443,6 @@ mod test {
         for n in 0..NUM_FACTORIALS as u32 {
             assert_eq!(factorial_ref(n), factorial(n));
         }
-    }
-
-    fn niters(n: u32) -> ProptestConfig {
-        ProptestConfig::with_cases(n)
     }
 
     /// spread `x` into an array of nibbles.

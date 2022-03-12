@@ -676,6 +676,9 @@ impl ScorePMF {
 
     #[cfg(test)]
     pub fn compare_pmfs(&self, other: &Self, target_score: u16) {
+        use crate::stats::kl_div_term;
+        use ndarray::Zip;
+
         println!();
         println!("E[X_1] = {:<}", self.expected_value());
         println!("E[X_2] = {:<}", other.expected_value());
@@ -683,14 +686,18 @@ impl ScorePMF {
         println!("stddev(X_1) = {:<}", self.stddev());
         println!("stddev(X_2) = {:<}", other.stddev());
         println!();
+        println!("∑ pmf1 = {:<}", self.total_mass());
+        println!("∑ pmf2 = {:<}", other.total_mass());
+        println!();
 
-        let mut table = tabular::Table::new("{:>}  {:<}  {:<}  {:<}  {:<}");
+        let mut table = tabular::Table::new("{:>}  {:<}  {:<}  {:<}  {:<}  {:<}");
         table.add_row(tabular::row!(
             "score",
             "pmf1",
             "pmf2",
             "|pmf1-pmf2|",
-            "(pmf1-pmf2)^2"
+            "(pmf1-pmf2)^2",
+            "pmf1 * ln(pmf1/pmf2)"
         ));
 
         let pmf1 = self.to_dense(target_score);
@@ -700,6 +707,9 @@ impl ScorePMF {
         let err = &pmf1 - &pmf2;
         let l1_diff = err.mapv(|x| x.abs());
         let err_sq = err.mapv(|x| x * x);
+        let kl_terms = Zip::from(pmf1.view())
+            .and(pmf2.view())
+            .map_collect(|&p1_i, &p2_i| kl_div_term(p1_i, p2_i));
 
         for idx in 0..pmf1.len() {
             let score = MarkovMatrix::i2s(idx);
@@ -707,7 +717,10 @@ impl ScorePMF {
             let p_score_2 = pmf2[idx];
             let l1_diff = l1_diff[idx];
             let err_sq = err_sq[idx];
-            table.add_row(tabular::row!(score, p_score_1, p_score_2, l1_diff, err_sq));
+            let kl_term = kl_terms[idx];
+            table.add_row(tabular::row!(
+                score, p_score_1, p_score_2, l1_diff, err_sq, kl_term
+            ));
         }
 
         println!(
@@ -716,6 +729,7 @@ impl ScorePMF {
         );
         println!("E[|pmf1 - pmf2|] = {:<}", l1_diff.mean().unwrap());
         println!("√ E[(pmf1 - pmf2)^2] = {:<}", err_sq.mean().unwrap().sqrt());
+        println!("D_KL(pmf1 || pmf2) = {:<}", kl_terms.sum());
 
         println!("\n{table}");
     }
@@ -739,7 +753,7 @@ pub struct MarkovMatrix(Array2<f64>);
 impl MarkovMatrix {
     /// score to state index
     #[inline]
-    const fn s2i(score: u16) -> usize {
+    pub(crate) const fn s2i(score: u16) -> usize {
         (score / 50) as usize
     }
 
@@ -750,7 +764,7 @@ impl MarkovMatrix {
     }
 
     #[inline]
-    const fn num_states(target_score: u16) -> usize {
+    pub(crate) const fn num_states(target_score: u16) -> usize {
         Self::s2i(target_score) + 1
     }
 
@@ -800,6 +814,22 @@ impl MarkovMatrix {
         }
 
         turns_cdf
+    }
+}
+
+#[cfg(test)]
+pub mod prop {
+    use super::*;
+    use proptest::prelude::*;
+    use std::ops::RangeInclusive;
+
+    pub fn arb_score(range: impl Into<RangeInclusive<u16>>) -> impl Strategy<Value = u16> {
+        let range = range.into();
+
+        let idx_start = MarkovMatrix::s2i(*range.start());
+        let idx_end = MarkovMatrix::s2i(*range.end());
+
+        (idx_start..=idx_end).prop_map(MarkovMatrix::i2s)
     }
 }
 
@@ -893,58 +923,5 @@ impl MarkovMatrix {
 //             ],
 //             actions(dice![1, 1, 2, 3, 4, 5]),
 //         );
-//     }
-//
-//     /// Given `X_1` and `X_2` independent random variables defined by the same CDF
-//     /// `cdf`, returns the `Pr[X_1 <= X_2]`.
-//     fn p_rv_lte_itself(cdf: ArrayView1<f64>) -> f64 {
-//         // p = ∑_{x_i} Pr[X_1 = x_i] * Pr[X_2 >= x_i]
-//         let p = 0.0;
-//
-//         // c_i1 = Pr[X <= prev(x_i)] = cdf[i - 1]
-//         let c_i1 = 0.0;
-//
-//         let (p, _c_i1) = cdf.into_iter().fold((p, c_i1), |(p, c_i1), &c_i| {
-//             // c_i = cdf[i]
-//
-//             // p_1 = Pr[X_1 = x_i]
-//             //     = Pr[X_1 <= x_i] - Pr[X_1 <= prev(x_i)]
-//             //     = cdf[i] - cdf[i - 1]
-//             let p_1 = c_i - c_i1;
-//
-//             // p_2 = Pr[X_2 >= x_i]
-//             //     = 1 - Pr[X_2 < x_i]
-//             //     = 1 - Pr[X_2 <= prev(x_i)]
-//             //     = 1 - cdf[i - 1]
-//             let p_2 = 1.0 - c_i1;
-//
-//             (p + (p_1 * p_2), c_i)
-//         });
-//
-//         p
-//     }
-//
-//     #[test]
-//     fn test_p_rv_lte_itself() {
-//         let cdf = Array1::from_vec(vec![0.1, 0.6, 1.0]);
-//         assert_relative_eq!(0.71, p_rv_lte_itself(cdf.view()));
-//     }
-//
-//     #[test]
-//     fn test_p_rv1_le_rv2() {
-//         let cdf1 = Array1::from_vec(vec![0.1, 0.6, 1.0]);
-//         let cdf2 = Array1::from_vec(vec![0.3, 0.7, 1.0]);
-//
-//         assert_relative_eq!(
-//             p_rv_lte_itself(cdf1.view()),
-//             p_rv1_le_rv2(cdf1.view(), cdf1.view())
-//         );
-//
-//         assert_relative_eq!(
-//             p_rv_lte_itself(cdf2.view()),
-//             p_rv1_le_rv2(cdf2.view(), cdf2.view())
-//         );
-//
-//         assert_relative_eq!(0.57, p_rv1_le_rv2(cdf1.view(), cdf2.view()));
 //     }
 // }
