@@ -118,12 +118,12 @@ pub(crate) fn g_test(n: usize, p: ArrayView1<f64>, p_hat: ArrayView1<f64>) -> f6
 //         0.0
 //     }
 // }
-//
-// /// The CDF of the Chi^2-distribution, where `dof` is the
-// /// "degrees-of-freedom" parameter and `x ∈ R`.
-// pub(crate) fn chisq_cdf(dof: f64, x: f64) -> f64 {
-//     ChiSquared::new(dof).unwrap().cdf(x)
-// }
+
+/// The CDF of the Chi^2-distribution, where `dof` is the
+/// "degrees-of-freedom" parameter and `x ∈ R`.
+pub(crate) fn chisq_cdf(dof: f64, x: f64) -> f64 {
+    ChiSquared::new(dof).unwrap().cdf(x)
+}
 
 /// A goodness-of-fit test between a hypothesized multinomial distribution, `p`,
 /// and an experimentally observed distribution, `p_hat`, both represented as
