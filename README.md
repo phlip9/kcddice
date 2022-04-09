@@ -33,7 +33,7 @@ The algorithm is a single-player [expectimax search](https://phlip9.com/notes/AI
 
 I didn't bother supporting Jokers/devils, since my Henry hasn't found any dice with them : )
 
-Unfortunatley, the current algorithm is actually not _quite_ optimal, since it doesn't consider the opponent's score or dice. You can see it's suggestions are not risky enough when your opponent is far ahead. If your opponent has only one roll left to (almost always) win, you should just go for broke and try to win on this turn; however, this algorithm doesn't currently take these factors into account.
+Unfortunately, the current algorithm is actually not _quite_ optimal, since it doesn't consider the opponent's score or dice. You can see it's suggestions are not risky enough when your opponent is far ahead. If your opponent has only one roll left to (almost always) win, you should just go for broke and try to win on this turn; however, this algorithm doesn't currently take these factors into account.
 
 I have some plans to change the setup from expectimax to a [markov decision process (MDP)](https://phlip9.com/notes/AI%20ML/Markov%20Decision%20Process%20(MDP)/) solved with [Q-value Iteration](https://phlip9.com/notes/AI%20ML/Markov%20Decision%20Process%20(MDP)/#q-value-iteration), but haven't had the time recently.
 
