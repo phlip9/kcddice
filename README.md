@@ -15,7 +15,15 @@ There are just four inputs you gotta fill out.
 3. **round score**: these are the points you've earned _this round_. If you bust and don't roll any scoring dice this turn, you'll _lose_ these points.
 4. **rolled dice**: these are the dice you've just rolled onto the board. For example, If you've rolled four standard dice, and they come up with two ones, a four, and a six, you would write `1 1 4 6` (the order doesn't matter). If you've rolled two standard dice, two Heavenly Kingdom dice, and an Odd die, and they come up 1, 3, 6 for the standards; 1, 5 for the Heavenly Kingdoms; and 6 for the Odd; you would write `1 1hk 3 5hk 6 6o` (again, order doesn't matter).
 
-Then hit "best action" and the algorithm will tell you to pass (select the highest scoring dice) or hold some dice and roll again.
+Then hit **best action** and the algorithm will tell you to pass (select the highest scoring dice) or hold some dice and roll again.
+
+Pro tip: open up the developer console to see some extra stats!
+
+## Cool stats
+
+* With 6 standard dice, you can bust on the first roll with ~3% probability.
+* With 6 standard dice, you can expect to reach 4000 points in ~7.5 turns, scoring ~530 points each turn.
+* When both players use 6 standard dice, the player who goes first is ~7% more likely to win (if they both use this strategy).
 
 ## How does it work?
 
