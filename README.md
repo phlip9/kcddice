@@ -2,7 +2,9 @@
 
 site: <https://phlip9.com/kcddice>
 
-I started playing KC: D a few months ago and got a bit hooked playing the dice game. In a rather classic software engineer move, I thought "I bet I can write an algorithm to play this..." Well, here we are after probably more hours than I've dumped into KC: D itself. I present: [Kingdom Come: Deliverance - Optimal Dice Strategy](https://phlip9.com/kcddice/)! Now my Henry is a gambling god, and yours can too! : )
+![kcddice site screenshot](screenshot.png)
+
+I started playing KC: D a few months ago and got a bit hooked playing the dice game. In a rather classic software engineer move, I thought "I bet I can write an algorithm to play this..." Well, here we are after probably more hours than I've dumped into KC: D itself. I present: [Kingdom Come: Deliverance - Optimal Dice Strategy](https://phlip9.com/kcddice/)! Now my Henry is a gambling god, and yours can be too! : )
 
 ## How do you use it?
 
